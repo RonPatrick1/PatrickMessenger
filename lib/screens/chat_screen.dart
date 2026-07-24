@@ -202,7 +202,8 @@ class _ChatScreenState extends State<ChatScreen> {
               (event.type == EventTypes.Message ||
                   isUndecryptableEvent(event)) &&
               event.relationshipType != RelationshipTypes.edit &&
-              (!hideLiamChatter || !isLiamChatterEvent(event)),
+              (!hideLiamChatter ||
+                  !isLiamChatterEvent(event, liamUserId: widget.liamUserId)),
         )
         .toList();
   }
@@ -215,7 +216,7 @@ class _ChatScreenState extends State<ChatScreen> {
               (event.type == EventTypes.Message ||
                   isUndecryptableEvent(event)) &&
               event.relationshipType != RelationshipTypes.edit &&
-              isLiamChatterEvent(event),
+              isLiamChatterEvent(event, liamUserId: widget.liamUserId),
         )
         .length;
   }
@@ -1081,6 +1082,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                   event.eventId,
                                 ),
                                 actionsEnabled: actionsEnabled,
+                                liamUserId: widget.liamUserId,
                                 onOpenActions: () => _openMessageActions(event),
                                 onSelectionTap: () => _toggleSelected(event),
                                 onReaction: (emoji) =>

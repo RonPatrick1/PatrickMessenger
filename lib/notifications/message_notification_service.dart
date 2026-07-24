@@ -20,6 +20,7 @@ class MessageNotificationService {
   final Client _client;
   final NotificationPreferenceController _preferences;
   final LiamChatterVisibilityController _liamChatterVisibility;
+  final String _liamUserId;
   final FlutterLocalNotificationsPlugin _plugin;
   final Queue<String> _recentEventIds = Queue<String>();
   final Set<String> _recentEventIdSet = <String>{};
@@ -35,7 +36,8 @@ class MessageNotificationService {
   MessageNotificationService(
     this._client,
     this._preferences,
-    this._liamChatterVisibility, {
+    this._liamChatterVisibility,
+    this._liamUserId, {
     FlutterLocalNotificationsPlugin? plugin,
   }) : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
 
@@ -233,7 +235,7 @@ class MessageNotificationService {
   Future<void> _showEvent(Event event) async {
     if (!_initialized || !_preferences.enabled) return;
     if (_liamChatterVisibility.isHidden(event.room.id) &&
-        isLiamChatterEvent(event)) {
+        isLiamChatterEvent(event, liamUserId: _liamUserId)) {
       return;
     }
     if (event.originServerTs.isBefore(_acceptEventsAfter)) return;

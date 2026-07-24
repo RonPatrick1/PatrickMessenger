@@ -26,7 +26,8 @@ String visibleMessageBody(Event event) {
   );
 }
 
-bool isLiamAnswer(Event event) {
+bool isLiamAnswer(Event event, {required String liamUserId}) {
+  if (event.senderId == liamUserId) return true;
   return isLiamAnswerContent(event.content, visibleMessageBody(event));
 }
 
@@ -77,8 +78,12 @@ String? reactionKeyFromContent(Map<String, dynamic> content) {
 bool isAnimatedGifName(String name) => name.toLowerCase().endsWith('.gif');
 
 /// Whether an event is a Liam question (sent by anyone, addressed to Liam)
-/// or a Liam answer, for the "hide Liam chatter" preference.
-bool isLiamChatterEvent(Event event) {
+/// or a Liam answer, for the "hide Liam chatter" preference. Checking the
+/// sender first (rather than only body text/content-key heuristics) is what
+/// catches Liam's image replies too, since the bridge's send_attachment
+/// call has no way to attach the usual liamEventContentKey marker.
+bool isLiamChatterEvent(Event event, {required String liamUserId}) {
+  if (event.senderId == liamUserId) return true;
   return isLiamChatterContent(event.content, visibleMessageBody(event));
 }
 

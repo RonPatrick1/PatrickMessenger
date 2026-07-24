@@ -44,6 +44,7 @@ Future<void> _startup() async {
     client,
     notificationController,
     liamChatterVisibility,
+    config.liamUserId,
   );
   await notificationService.initialize();
   final iosPushService = IosPushService(

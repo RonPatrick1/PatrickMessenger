@@ -13,6 +13,7 @@ class MessageBubble extends StatelessWidget {
   final bool selected;
   final bool pinned;
   final bool actionsEnabled;
+  final String liamUserId;
   final VoidCallback onOpenActions;
   final VoidCallback onSelectionTap;
   final ValueChanged<String> onReaction;
@@ -25,6 +26,7 @@ class MessageBubble extends StatelessWidget {
     required this.selected,
     required this.pinned,
     required this.actionsEnabled,
+    required this.liamUserId,
     required this.onOpenActions,
     required this.onSelectionTap,
     required this.onReaction,
@@ -34,7 +36,7 @@ class MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final displayEvent = event.getDisplayEvent(timeline);
-    final liamAnswer = isLiamAnswer(displayEvent);
+    final liamAnswer = isLiamAnswer(displayEvent, liamUserId: liamUserId);
     final colors = Theme.of(context).colorScheme;
     final time = TimeOfDay.fromDateTime(event.originServerTs).format(context);
     final bubbleColor = selected
@@ -115,6 +117,7 @@ class MessageBubble extends StatelessWidget {
                             _MessageContent(
                               event: displayEvent,
                               textColor: textColor,
+                              liamUserId: liamUserId,
                             ),
                             const SizedBox(height: 4),
                             Row(
@@ -315,12 +318,17 @@ class _ReactionBar extends StatelessWidget {
 class _MessageContent extends StatelessWidget {
   final Event event;
   final Color textColor;
+  final String liamUserId;
 
-  const _MessageContent({required this.event, required this.textColor});
+  const _MessageContent({
+    required this.event,
+    required this.textColor,
+    required this.liamUserId,
+  });
 
   @override
   Widget build(BuildContext context) {
-    if (isLiamAnswer(event)) {
+    if (isLiamAnswer(event, liamUserId: liamUserId)) {
       return _LiamAnswerContent(event: event, textColor: textColor);
     }
     return switch (event.messageType) {

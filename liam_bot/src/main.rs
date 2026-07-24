@@ -3,11 +3,12 @@ use std::{env, path::PathBuf, sync::Arc};
 use anyhow::{Context as _, Result, bail};
 use matrix_sdk::{
     Client, Room, RoomState,
+    attachment::AttachmentConfig,
     config::SyncSettings,
     event_handler::Ctx,
     ruma::events::room::{
         member::StrippedRoomMemberEvent,
-        message::{MessageType, OriginalSyncRoomMessageEvent},
+        message::{MessageType, OriginalSyncRoomMessageEvent, TextMessageEventContent},
     },
 };
 use reqwest::Client as HttpClient;
@@ -266,7 +267,7 @@ async fn request_bridge_answer(
     if answer.is_empty() {
         bail!("Liam bridge returned an empty answer");
     }
-    send_liam_answer(room, &answer).await?;
+    send_liam_answer(room, &answer, &bot.http).await?;
     Ok(())
 }
 
@@ -291,15 +292,122 @@ async fn send_text(room: &Room, body: &str) -> Result<()> {
     Ok(())
 }
 
-async fn send_liam_answer(room: &Room, answer: &str) -> Result<()> {
-    let mut content = json!({
-        "msgtype": "m.text",
-        "body": format!("Liam:\n{answer}"),
-    });
-    if let Value::Object(ref mut object) = content {
-        object.insert(LIAM_ANSWER_KEY.to_owned(), Value::Bool(true));
+struct MarkdownImage {
+    alt: String,
+    target: String,
+}
+
+/// Pulls every ![alt](target) out of `text`, returning the images found and
+/// the leftover text with those Markdown fragments removed (so the same
+/// picture doesn't show up twice — once as a real image, once as raw
+/// Markdown text). Hand-rolled rather than a regex crate, since the pattern
+/// is simple and this avoids a new dependency for one call site.
+fn extract_and_strip_markdown_images(text: &str) -> (Vec<MarkdownImage>, String) {
+    let mut images = Vec::new();
+    let mut stripped = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("![") {
+        stripped.push_str(&rest[..start]);
+        let after_bang = &rest[start + 2..];
+        let Some(alt_end) = after_bang.find(']') else {
+            stripped.push_str(&rest[start..]);
+            rest = "";
+            break;
+        };
+        let after_alt = &after_bang[alt_end + 1..];
+        if !after_alt.starts_with('(') {
+            stripped.push_str(&rest[start..start + 2]);
+            rest = after_bang;
+            continue;
+        }
+        let after_paren = &after_alt[1..];
+        let Some(url_end) = after_paren.find(')') else {
+            stripped.push_str(&rest[start..]);
+            rest = "";
+            break;
+        };
+        images.push(MarkdownImage {
+            alt: after_bang[..alt_end].to_owned(),
+            target: after_paren[..url_end].trim().to_owned(),
+        });
+        rest = &after_paren[url_end + 1..];
     }
-    room.send_raw("m.room.message", content).await?;
+    stripped.push_str(rest);
+    (images, stripped)
+}
+
+fn guess_image_mime(target: &str) -> mime::Mime {
+    let path = target
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(target)
+        .to_ascii_lowercase();
+    if path.ends_with(".jpg") || path.ends_with(".jpeg") {
+        mime::IMAGE_JPEG
+    } else if path.ends_with(".gif") {
+        mime::IMAGE_GIF
+    } else if path.ends_with(".webp") {
+        "image/webp".parse().unwrap()
+    } else {
+        mime::IMAGE_PNG
+    }
+}
+
+async fn fetch_image_bytes(http: &HttpClient, target: &str) -> Result<Vec<u8>> {
+    if target.starts_with('/') && std::path::Path::new(target).exists() {
+        return std::fs::read(target).context("reading local generated image");
+    }
+    let response = http.get(target).send().await?.error_for_status()?;
+    Ok(response.bytes().await?.to_vec())
+}
+
+async fn send_liam_answer(room: &Room, answer: &str, http: &HttpClient) -> Result<()> {
+    let (images, stripped) = extract_and_strip_markdown_images(answer);
+    for image in &images {
+        match fetch_image_bytes(http, &image.target).await {
+            Ok(bytes) => {
+                let mime = guess_image_mime(&image.target);
+                let filename = std::path::Path::new(&image.target)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("image")
+                    .to_owned();
+                let caption = (!image.alt.is_empty())
+                    .then(|| TextMessageEventContent::plain(image.alt.clone()));
+                if let Err(error) = room
+                    .send_attachment(
+                        filename,
+                        &mime,
+                        bytes,
+                        AttachmentConfig::new().caption(caption),
+                    )
+                    .await
+                {
+                    warn!(target = %image.target, %error, "failed to send Liam image attachment");
+                }
+            }
+            Err(error) => {
+                warn!(target = %image.target, %error, "failed to fetch Liam image for Matrix upload");
+            }
+        }
+    }
+
+    let remaining = stripped.trim();
+    if !remaining.is_empty() || images.is_empty() {
+        let body = if remaining.is_empty() {
+            answer.to_owned()
+        } else {
+            format!("Liam:\n{remaining}")
+        };
+        let mut content = json!({
+            "msgtype": "m.text",
+            "body": body,
+        });
+        if let Value::Object(ref mut object) = content {
+            object.insert(LIAM_ANSWER_KEY.to_owned(), Value::Bool(true));
+        }
+        room.send_raw("m.room.message", content).await?;
+    }
     Ok(())
 }
 
@@ -375,5 +483,56 @@ mod tests {
     #[test]
     fn preserves_an_ordinary_model_answer() {
         assert_eq!(normalize_answer("A useful answer."), "A useful answer.");
+    }
+
+    #[test]
+    fn extracts_an_image_with_surrounding_text() {
+        let (images, stripped) =
+            extract_and_strip_markdown_images("Here you go:\n![a cat](https://x/cat.png)\nEnjoy!");
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].alt, "a cat");
+        assert_eq!(images[0].target, "https://x/cat.png");
+        assert_eq!(stripped, "Here you go:\n\nEnjoy!");
+    }
+
+    #[test]
+    fn extracts_a_lone_image_leaving_no_text() {
+        let (images, stripped) =
+            extract_and_strip_markdown_images("![red barn](/var/www/LiamAgent/.liam_generated/a.png)");
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].target, "/var/www/LiamAgent/.liam_generated/a.png");
+        assert_eq!(stripped.trim(), "");
+    }
+
+    #[test]
+    fn extracts_multiple_images() {
+        let (images, _) =
+            extract_and_strip_markdown_images("![a](https://x/a.png) and ![b](https://x/b.jpg)");
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].target, "https://x/a.png");
+        assert_eq!(images[1].target, "https://x/b.jpg");
+    }
+
+    #[test]
+    fn leaves_ordinary_text_without_images_untouched() {
+        let (images, stripped) = extract_and_strip_markdown_images("Just a normal answer.");
+        assert!(images.is_empty());
+        assert_eq!(stripped, "Just a normal answer.");
+    }
+
+    #[test]
+    fn tolerates_malformed_markdown_image_syntax() {
+        let (images, stripped) = extract_and_strip_markdown_images("Broken: ![alt](no closing paren");
+        assert!(images.is_empty());
+        assert_eq!(stripped, "Broken: ![alt](no closing paren");
+    }
+
+    #[test]
+    fn guesses_mime_type_from_extension() {
+        assert_eq!(guess_image_mime("https://x/a.JPG"), mime::IMAGE_JPEG);
+        assert_eq!(guess_image_mime("https://x/a.gif?w=100"), mime::IMAGE_GIF);
+        assert_eq!(guess_image_mime("https://x/a.webp").essence_str(), "image/webp");
+        assert_eq!(guess_image_mime("/tmp/a.png"), mime::IMAGE_PNG);
+        assert_eq!(guess_image_mime("/tmp/unknown"), mime::IMAGE_PNG);
     }
 }
