@@ -321,7 +321,12 @@ fn extract_and_strip_markdown_images(text: &str) -> (Vec<MarkdownImage>, String)
             continue;
         }
         let after_paren = &after_alt[1..];
-        let Some(url_end) = after_paren.find(')') else {
+        // A plain `find(')')` would stop at the first `)`, which can be part
+        // of the URL itself (thumbor-style filters like `no_upscale()` are
+        // common in image_search results) rather than the Markdown link's
+        // actual closing delimiter. Track paren depth so an embedded,
+        // balanced `(...)` inside the URL doesn't truncate it.
+        let Some(url_end) = find_matching_close_paren(after_paren) else {
             stripped.push_str(&rest[start..]);
             rest = "";
             break;
@@ -334,6 +339,26 @@ fn extract_and_strip_markdown_images(text: &str) -> (Vec<MarkdownImage>, String)
     }
     stripped.push_str(rest);
     (images, stripped)
+}
+
+/// Finds the `)` that closes the Markdown link's opening `(`, treating any
+/// balanced `(...)` pair inside `s` as part of the URL rather than the end
+/// of the link.
+fn find_matching_close_paren(s: &str) -> Option<usize> {
+    let mut depth = 0i32;
+    for (index, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                if depth == 0 {
+                    return Some(index);
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn guess_image_mime(target: &str) -> mime::Mime {
@@ -511,6 +536,19 @@ mod tests {
         assert_eq!(images.len(), 2);
         assert_eq!(images[0].target, "https://x/a.png");
         assert_eq!(images[1].target, "https://x/b.jpg");
+    }
+
+    #[test]
+    fn does_not_truncate_a_url_containing_balanced_parens() {
+        let (images, stripped) = extract_and_strip_markdown_images(
+            "![a barn](https://x/thmb/abc=/1500x0/filters:no_upscale()/real-image.jpg) Here.",
+        );
+        assert_eq!(images.len(), 1);
+        assert_eq!(
+            images[0].target,
+            "https://x/thmb/abc=/1500x0/filters:no_upscale()/real-image.jpg"
+        );
+        assert_eq!(stripped, " Here.");
     }
 
     #[test]
