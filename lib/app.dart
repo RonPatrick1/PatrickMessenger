@@ -111,8 +111,13 @@ class PatrickMessengerApp extends StatelessWidget {
 
 class StartupFailureApp extends StatelessWidget {
   final String message;
+  final Future<void> Function() onRetry;
 
-  const StartupFailureApp({required this.message, super.key});
+  const StartupFailureApp({
+    required this.message,
+    required this.onRetry,
+    super.key,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -137,6 +142,11 @@ class StartupFailureApp extends StatelessWidget {
                     ),
                     const SizedBox(height: 12),
                     Text(message, textAlign: TextAlign.center),
+                    const SizedBox(height: 20),
+                    FilledButton(
+                      onPressed: onRetry,
+                      child: const Text('Try again'),
+                    ),
                   ],
                 ),
               ),

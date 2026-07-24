@@ -10,7 +10,15 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'linux_sqlite_loader.dart';
 
-Future<void> _initializeVodozemac() => flutter_vodozemac.init();
+// flutter_vodozemac.init() hard-crashes if called a second time within the
+// same isolate. The Matrix SDK's background crypto operations (e.g. session
+// restore) can invoke the vodozemacInit callback again after the explicit
+// startup call below, so this must stay idempotent per isolate.
+Future<void>? _vodozemacInitialization;
+
+Future<void> _initializeVodozemac() {
+  return _vodozemacInitialization ??= flutter_vodozemac.init();
+}
 
 class MatrixClientFactory {
   static const _databaseName = 'patrick_messenger';
