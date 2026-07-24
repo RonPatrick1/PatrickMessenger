@@ -328,9 +328,10 @@ class _MessageContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (isLiamAnswer(event, liamUserId: liamUserId)) {
-      return _LiamAnswerContent(event: event, textColor: textColor);
-    }
+    // Liam's picture replies are still real image/sticker events and must
+    // render as such. Only an ordinary text message gets the special
+    // "Liam" heading treatment — checking that before the message-type
+    // switch would swallow Liam's images into a plain text bubble instead.
     return switch (event.messageType) {
       MessageTypes.Image ||
       MessageTypes.Sticker => _EncryptedImage(event: event),
@@ -344,13 +345,17 @@ class _MessageContent extends StatelessWidget {
           ),
         ],
       ),
-      _ => SelectableText(
-        visibleMessageBody(event),
-        style: TextStyle(
-          color: textColor,
-          fontSize: event.onlyEmotes && event.numberEmotes <= 5 ? 38 : null,
-        ),
-      ),
+      _ => isLiamAnswer(event, liamUserId: liamUserId)
+          ? _LiamAnswerContent(event: event, textColor: textColor)
+          : SelectableText(
+              visibleMessageBody(event),
+              style: TextStyle(
+                color: textColor,
+                fontSize: event.onlyEmotes && event.numberEmotes <= 5
+                    ? 38
+                    : null,
+              ),
+            ),
     };
   }
 }
