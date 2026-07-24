@@ -63,13 +63,12 @@ sudo apt install \
 rustup default stable
 ```
 
-Then run:
+Copy `dart_define.env.example` to `dart_define.env` and fill in your own
+GIPHY_API_KEY (see "Public GIF search" below). That file is gitignored, so it
+never enters the repository. Then run:
 
 ```sh
-flutter run -d linux \
-  --dart-define=MATRIX_HOMESERVER_URL=http://127.0.0.1:8008 \
-  --dart-define=ALLOW_INSECURE_DEVELOPMENT=true \
-  --dart-define=GIPHY_API_KEY="$GIPHY_API_KEY"
+flutter run -d linux --dart-define-from-file=dart_define.env
 ```
 
 The installed Ubuntu launcher runs the built Linux bundle. After rebuilding,
@@ -158,15 +157,18 @@ longer connected, the window is constrained to an available monitor.
 
 ### Public GIF search
 
-Create a beta API key in the GIPHY developer dashboard, then export it before
-building:
+Create a beta API key in the GIPHY developer dashboard, then put it in your
+local `dart_define.env` (copied from `dart_define.env.example`, gitignored):
 
 ```sh
-export GIPHY_API_KEY='your key'
+GIPHY_API_KEY=your key
 ```
 
-The same GIPHY API key works across all platforms. Do not commit keys to the
-repository. The development app displays the required GIPHY attribution and
+Every build command in this README reads that file via
+`--dart-define-from-file=dart_define.env`, so the key only needs to be typed
+once per machine. The same GIPHY API key works across all platforms. Do not
+commit keys to the repository. The development app displays the required
+GIPHY attribution and
 uses a PG-13 content filter. GIPHY receives GIF searches, the workstation's
 public IP address, and requests for preview/selected media. After selection,
 Patrick Messenger downloads the GIF and uploads a new end-to-end-encrypted
@@ -240,10 +242,7 @@ docker run --rm \
   -v "$HOME/.local/share/flutter-3.44.6:/opt/flutter" \
   -v "$HOME/.pub-cache:/home/ubuntu/.pub-cache" \
   patrick-messenger-linux-build:local \
-  flutter build linux --debug \
-  --dart-define=MATRIX_HOMESERVER_URL=http://127.0.0.1:8008 \
-  --dart-define=ALLOW_INSECURE_DEVELOPMENT=true \
-  --dart-define=GIPHY_API_KEY="$GIPHY_API_KEY"
+  flutter build linux --debug --dart-define-from-file=dart_define.env
 ```
 
 The reproducible Android builder supplies API 36 and NDK 28.2 without changing

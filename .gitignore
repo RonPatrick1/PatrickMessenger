@@ -56,6 +56,9 @@ app.*.map.json
 # Locally built app packages (large binaries, always reproducible from source)
 /artifacts/
 
+# Local build secrets (real GIPHY_API_KEY etc.) — see dart_define.env.example
+/dart_define.env
+
 # Private homeserver state and deployment credentials
 /server/data/
 /server/.env
