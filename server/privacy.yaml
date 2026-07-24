@@ -1,0 +1,52 @@
+# Local development overrides. Production must put HTTPS in front of Synapse
+# and expose only the client endpoints.
+
+report_stats: false
+enable_registration: false
+enable_registration_without_verification: false
+allow_guest_access: false
+
+# Every locally-created room begins encrypted. The client also refuses to open
+# rooms that do not contain an encryption state event.
+encryption_enabled_by_default_for_room_type: all
+
+# No server-to-server Matrix federation is exposed by this listener.
+listeners:
+  - port: 8008
+    tls: false
+    type: http
+    bind_addresses:
+      - "0.0.0.0"
+    resources:
+      - names:
+          - client
+        compress: false
+
+federation_domain_whitelist: []
+trusted_key_servers: []
+suppress_key_server_warning: true
+allow_public_rooms_without_auth: false
+allow_public_rooms_over_federation: false
+allow_device_name_lookup_over_federation: false
+
+url_preview_enabled: false
+enable_search: false
+enable_room_list_search: false
+require_auth_for_profile_requests: true
+limit_profile_requests_to_users_who_share_rooms: true
+
+user_directory:
+  enabled: false
+  search_all_users: false
+
+presence:
+  enabled: false
+
+# Push sends opaque event and room IDs only. Message content remains encrypted
+# and is never included in the gateway payload.
+push:
+  enabled: true
+  include_content: false
+  jitter_delay: 10s
+
+max_upload_size: 50M

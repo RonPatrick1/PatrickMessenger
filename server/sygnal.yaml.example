@@ -1,0 +1,31 @@
+http:
+  bind_addresses: ['0.0.0.0']
+  port: 5000
+
+log:
+  setup:
+    version: 1
+    formatters:
+      normal:
+        format: "%(asctime)s %(levelname)s %(name)s %(message)s"
+    handlers:
+      stdout:
+        class: logging.StreamHandler
+        formatter: normal
+        stream: ext://sys.stdout
+    root:
+      handlers: [stdout]
+      level: INFO
+    disable_existing_loggers: false
+
+apps:
+  com.patricklamphier.patrickMessenger:
+    type: apns
+    keyfile: /sygnal/secrets/AuthKey.p8
+    key_id: REPLACE_WITH_APPLE_KEY_ID
+    team_id: REPLACE_WITH_APPLE_TEAM_ID
+    topic: com.patricklamphier.patrickMessenger
+    platform: sandbox
+    push_type: alert
+    convert_device_token_to_hex: false
+    send_badge_counts: false

@@ -1,0 +1,7 @@
+.dart_tool/
+.git/
+build/
+liam_bot/target/
+server/.env
+server/data/
+server/liam-data/

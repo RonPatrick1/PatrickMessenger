@@ -1,0 +1,91 @@
+name: patrick-messenger
+
+services:
+  synapse:
+    image: ghcr.io/element-hq/synapse:v1.153.0
+    container_name: patrick-messenger-synapse
+    restart: unless-stopped
+    command:
+      - run
+      - -m
+      - synapse.app.homeserver
+      - --config-path=/data/homeserver.yaml
+      - --config-path=/config/privacy.yaml
+    environment:
+      UID: "${HOST_UID:-1000}"
+      GID: "${HOST_GID:-1000}"
+      TZ: America/Detroit
+    ports:
+      - "127.0.0.1:8008:8008"
+      # Private-LAN development access for the Mac mini and physical phones.
+      # Do not forward this port through the router.
+      - "192.168.0.178:8008:8008"
+    volumes:
+      - ./data:/data
+      - ./privacy.yaml:/config/privacy.yaml:ro
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fSs
+        - http://localhost:8008/health
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  liam:
+    build:
+      context: ..
+      dockerfile: liam_bot/Dockerfile
+    container_name: patrick-messenger-liam
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - path: .env
+        required: false
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      LIAM_HOMESERVER_URL: http://127.0.0.1:8008
+      LIAM_STORE_PATH: /data/matrix-store
+      LIAM_BRIDGE_URL: http://127.0.0.1:8787/chat
+      RUST_LOG: patrick_messenger_liam=info,matrix_sdk_crypto::backups=error,warn
+    volumes:
+      - ./liam-data:/data
+    depends_on:
+      synapse:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  sygnal:
+    image: matrixdotorg/sygnal:v0.15.0
+    container_name: patrick-messenger-sygnal
+    profiles: ["push"]
+    restart: unless-stopped
+    environment:
+      SYGNAL_CONF: /sygnal/sygnal.yaml
+    ports:
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - ./sygnal.yaml:/sygnal/sygnal.yaml:ro
+      - ./push-secrets:/sygnal/secrets:ro
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

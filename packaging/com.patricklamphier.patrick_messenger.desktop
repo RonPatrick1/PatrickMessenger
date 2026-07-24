@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Patrick Messenger
+Comment=Private family messaging
+Exec=/var/www/PatrickMessenger/build/linux/x64/debug/bundle/patrick_messenger
+TryExec=/var/www/PatrickMessenger/build/linux/x64/debug/bundle/patrick_messenger
+Icon=mail-message-new
+Terminal=false
+Categories=Network;Chat;InstantMessaging;
+StartupNotify=true
+StartupWMClass=com.patricklamphier.patrick_messenger
