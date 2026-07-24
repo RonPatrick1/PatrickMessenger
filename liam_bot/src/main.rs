@@ -361,6 +361,55 @@ fn find_matching_close_paren(s: &str) -> Option<usize> {
     None
 }
 
+/// Matrix's plain-text messages don't render Markdown, so leftover text
+/// (after images are pulled out) would otherwise show raw `[label](url)`
+/// links and `*emphasis*` asterisks verbatim, as seen live with Liam's
+/// "*Source: [vecteezy.com](https://www.vecteezy.com)*" attributions.
+/// Convert to plain text instead: links become `label (url)`, and emphasis
+/// asterisks are dropped.
+fn plainify_markdown_text(text: &str) -> String {
+    convert_markdown_links_to_plain(text).replace('*', "")
+}
+
+fn convert_markdown_links_to_plain(text: &str) -> String {
+    let mut result = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('[') {
+        result.push_str(&rest[..start]);
+        let after_bracket = &rest[start + 1..];
+        let Some(label_end) = after_bracket.find(']') else {
+            result.push_str(&rest[start..]);
+            rest = "";
+            break;
+        };
+        let after_label = &after_bracket[label_end + 1..];
+        if !after_label.starts_with('(') {
+            result.push('[');
+            rest = after_bracket;
+            continue;
+        }
+        let after_paren = &after_label[1..];
+        let Some(url_end) = find_matching_close_paren(after_paren) else {
+            result.push_str(&rest[start..]);
+            rest = "";
+            break;
+        };
+        let label = after_bracket[..label_end].trim();
+        let url = after_paren[..url_end].trim();
+        if label == url {
+            result.push_str(url);
+        } else {
+            result.push_str(label);
+            result.push_str(" (");
+            result.push_str(url);
+            result.push(')');
+        }
+        rest = &after_paren[url_end + 1..];
+    }
+    result.push_str(rest);
+    result
+}
+
 fn guess_image_mime(target: &str) -> mime::Mime {
     let path = target
         .split(['?', '#'])
@@ -417,10 +466,11 @@ async fn send_liam_answer(room: &Room, answer: &str, http: &HttpClient) -> Resul
         }
     }
 
-    let remaining = stripped.trim();
+    let remaining = plainify_markdown_text(stripped.trim());
+    let remaining = remaining.trim();
     if !remaining.is_empty() || images.is_empty() {
         let body = if remaining.is_empty() {
-            answer.to_owned()
+            plainify_markdown_text(answer)
         } else {
             format!("Liam:\n{remaining}")
         };
@@ -572,5 +622,31 @@ mod tests {
         assert_eq!(guess_image_mime("https://x/a.webp").essence_str(), "image/webp");
         assert_eq!(guess_image_mime("/tmp/a.png"), mime::IMAGE_PNG);
         assert_eq!(guess_image_mime("/tmp/unknown"), mime::IMAGE_PNG);
+    }
+
+    #[test]
+    fn plainifies_liams_real_source_attribution_lines() {
+        assert_eq!(
+            plainify_markdown_text(
+                "*Source: [vecteezy.com](https://www.vecteezy.com)*"
+            ),
+            "Source: vecteezy.com (https://www.vecteezy.com)"
+        );
+    }
+
+    #[test]
+    fn collapses_a_link_whose_label_matches_its_url() {
+        assert_eq!(
+            plainify_markdown_text("See [https://x/a](https://x/a) for more."),
+            "See https://x/a for more."
+        );
+    }
+
+    #[test]
+    fn leaves_plain_text_without_markdown_untouched() {
+        assert_eq!(
+            plainify_markdown_text("Just a normal answer."),
+            "Just a normal answer."
+        );
     }
 }
