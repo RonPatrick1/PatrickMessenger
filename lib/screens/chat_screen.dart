@@ -632,8 +632,28 @@ class _ChatScreenState extends State<ChatScreen> {
         await _togglePinned(event);
       case MessageAction.info:
         await _showMessageInfo(event, timeline);
+      case MessageAction.resend:
+        await _resendEvent(event);
+      case MessageAction.cancelSend:
+        await _cancelSendEvent(event);
       case MessageAction.delete:
         await _deleteEvents([event]);
+    }
+  }
+
+  Future<void> _resendEvent(Event event) async {
+    try {
+      await event.sendAgain();
+    } catch (_) {
+      if (mounted) _showError('The message could not be resent.');
+    }
+  }
+
+  Future<void> _cancelSendEvent(Event event) async {
+    try {
+      await event.cancelSend();
+    } catch (_) {
+      if (mounted) _showError('The message could not be removed.');
     }
   }
 

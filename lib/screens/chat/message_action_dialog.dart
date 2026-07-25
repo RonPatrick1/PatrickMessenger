@@ -12,6 +12,8 @@ enum MessageAction {
   select,
   pin,
   info,
+  resend,
+  cancelSend,
   delete,
 }
 
@@ -35,6 +37,7 @@ List<MessageAction> availableMessageActions({
   required bool mine,
   required bool isText,
   required bool canRedact,
+  required EventStatus status,
 }) {
   return [
     MessageAction.reply,
@@ -44,6 +47,8 @@ List<MessageAction> availableMessageActions({
     MessageAction.select,
     MessageAction.pin,
     MessageAction.info,
+    if (mine && status.isError) MessageAction.resend,
+    if (mine && !status.isSent) MessageAction.cancelSend,
     if (canRedact) MessageAction.delete,
   ];
 }
@@ -109,6 +114,7 @@ class _MessageActionContent extends StatelessWidget {
       mine: mine,
       isText: isText,
       canRedact: event.canRedact,
+      status: event.status,
     );
     return SingleChildScrollView(
       padding: const EdgeInsets.only(bottom: 10),
@@ -194,6 +200,19 @@ class _MessageActionContent extends StatelessWidget {
             label: 'Info',
             action: MessageAction.info,
           ),
+          if (actions.contains(MessageAction.resend))
+            const _ActionTile(
+              icon: Icons.refresh,
+              label: 'Resend',
+              action: MessageAction.resend,
+            ),
+          if (actions.contains(MessageAction.cancelSend))
+            const _ActionTile(
+              icon: Icons.cancel_outlined,
+              label: 'Cancel sending',
+              action: MessageAction.cancelSend,
+              destructive: true,
+            ),
           if (actions.contains(MessageAction.delete))
             const _ActionTile(
               icon: Icons.delete_outline,
