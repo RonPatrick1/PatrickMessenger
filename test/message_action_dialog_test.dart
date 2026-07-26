@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:matrix/matrix.dart';
 import 'package:patrick_messenger/screens/chat/message_action_dialog.dart';
 
 void main() {
@@ -7,6 +8,7 @@ void main() {
       mine: true,
       isText: true,
       canRedact: true,
+      status: EventStatus.synced,
     );
 
     expect(actions, contains(MessageAction.edit));
@@ -20,6 +22,7 @@ void main() {
       mine: false,
       isText: true,
       canRedact: false,
+      status: EventStatus.synced,
     );
 
     expect(actions, isNot(contains(MessageAction.edit)));

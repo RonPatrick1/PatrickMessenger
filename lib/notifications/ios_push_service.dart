@@ -1,3 +1,6 @@
+// Named public constructor arguments intentionally initialize private fields.
+// ignore_for_file: prefer_initializing_formals
+
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
