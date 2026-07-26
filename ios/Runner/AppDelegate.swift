@@ -4,6 +4,7 @@ import UserNotifications
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+  private static let appGroup = "group.com.patricklamphier.patrickMessenger"
   private var apnsChannel: FlutterMethodChannel?
   private var apnsToken: String?
 
@@ -27,11 +28,37 @@ import UserNotifications
       binaryMessenger: engineBridge.applicationRegistrar.messenger()
     )
     channel.setMethodCallHandler { [weak self] call, result in
-      guard call.method == "getToken" else {
+      switch call.method {
+      case "getToken":
+        result(self?.apnsToken)
+      case "getSharedContainerPath":
+        result(
+          FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: Self.appGroup
+          )?.path
+        )
+      case "configureNotificationExtension":
+        guard
+          let values = call.arguments as? [String: Any],
+          let defaults = UserDefaults(suiteName: Self.appGroup)
+        else {
+          result(
+            FlutterError(
+              code: "invalid_notification_configuration",
+              message: "Notification extension configuration is invalid.",
+              details: nil
+            )
+          )
+          return
+        }
+        defaults.set(values["homeserver"], forKey: "homeserver")
+        defaults.set(values["accessToken"], forKey: "accessToken")
+        defaults.set(values["userId"], forKey: "userId")
+        defaults.set(values["showPreviews"], forKey: "showPreviews")
+        result(nil)
+      default:
         result(FlutterMethodNotImplemented)
-        return
       }
-      result(self?.apnsToken)
     }
     apnsChannel = channel
   }

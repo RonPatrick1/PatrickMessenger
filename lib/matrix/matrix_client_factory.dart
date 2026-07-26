@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as flutter_vodozemac;
 import 'package:matrix/matrix.dart';
 import 'package:path/path.dart' as path;
@@ -22,6 +23,9 @@ Future<void> _initializeVodozemac() {
 
 class MatrixClientFactory {
   static const _databaseName = 'patrick_messenger';
+  static const _iosChannel = MethodChannel(
+    'com.patricklamphier.patrickMessenger/apns',
+  );
 
   static Future<Client> create({required Uri homeserver}) async {
     await _initializeVodozemac();
@@ -32,10 +36,17 @@ class MatrixClientFactory {
     );
     await mediaDirectory.create(recursive: true);
 
-    final databasePath = path.join(
+    final oldDatabasePath = path.join(
       supportDirectory.path,
       'patrick_messenger.sqlite',
     );
+    final sharedContainerPath = await _iosSharedContainerPath();
+    final databasePath = sharedContainerPath == null
+        ? oldDatabasePath
+        : path.join(sharedContainerPath, 'patrick_messenger.sqlite');
+    if (databasePath != oldDatabasePath) {
+      await _copyExistingDatabase(oldDatabasePath, databasePath);
+    }
     final (database, databaseFactory) = await _openDatabase(databasePath);
     final matrixDatabase = await MatrixSdkDatabase.init(
       _databaseName,
@@ -62,6 +73,35 @@ class MatrixClientFactory {
     // away from the private-LAN homeserver URL to the public HTTPS proxy.
     await client.init(newHomeserver: homeserver);
     return client;
+  }
+
+  static Future<String?> _iosSharedContainerPath() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return null;
+    try {
+      return await _iosChannel.invokeMethod<String>('getSharedContainerPath');
+    } on PlatformException catch (error) {
+      debugPrint('Shared iOS notification storage is unavailable: $error');
+      return null;
+    }
+  }
+
+  static Future<void> _copyExistingDatabase(
+    String oldDatabasePath,
+    String sharedDatabasePath,
+  ) async {
+    final sharedDatabase = File(sharedDatabasePath);
+    if (await sharedDatabase.exists()) return;
+    final oldDatabase = File(oldDatabasePath);
+    if (!await oldDatabase.exists()) return;
+
+    await sharedDatabase.parent.create(recursive: true);
+    await oldDatabase.copy(sharedDatabasePath);
+    for (final suffix in const ['-wal', '-shm']) {
+      final source = File('$oldDatabasePath$suffix');
+      if (await source.exists()) {
+        await source.copy('$sharedDatabasePath$suffix');
+      }
+    }
   }
 
   static Future<(Database, DatabaseFactory?)> _openDatabase(

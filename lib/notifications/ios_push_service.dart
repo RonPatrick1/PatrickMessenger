@@ -66,6 +66,12 @@ class IosPushService {
     }
     _updating = true;
     try {
+      await _channel.invokeMethod<void>('configureNotificationExtension', {
+        'homeserver': _client.homeserver.toString(),
+        'accessToken': _client.accessToken,
+        'userId': _client.userID,
+        'showPreviews': _preferences.showPreviews,
+      });
       if (!_preferences.enabled) {
         await _client.deletePusher(PusherId(appId: _appId, pushkey: token));
         return;
@@ -76,9 +82,7 @@ class IosPushService {
         'content-available': 1,
         'alert': <String, Object?>{
           'title': 'Patrick Messenger',
-          'body': _preferences.showPreviews
-              ? 'Open to view the new encrypted message.'
-              : 'New encrypted message',
+          'body': 'New encrypted message',
         },
         if (_preferences.soundEnabled) 'sound': 'default',
       };
