@@ -23,9 +23,17 @@ status="$({ curl --silent --show-error \
   --max-time 15 \
   "$gateway"; } || true)"
 
+if [[ "$status" == 400 ]] &&
+   grep -Fxq 'No devices in notification' "$response_file"; then
+  echo "Matrix push gateway is publicly reachable and Sygnal is responding."
+  exit 0
+fi
 if [[ "$status" != 200 ]]; then
   echo "Push gateway check failed: $gateway returned HTTP ${status:-unreachable}." >&2
   echo "Expected Sygnal, not the website application or an nginx error page." >&2
+  if [[ -s "$response_file" ]]; then
+    echo "Response: $(head -c 200 "$response_file")" >&2
+  fi
   exit 1
 fi
 if ! grep -Eq '"rejected"[[:space:]]*:[[:space:]]*\[[[:space:]]*\]' "$response_file"; then
