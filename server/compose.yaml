@@ -20,6 +20,17 @@ services:
       # Private-LAN development access for the Mac mini and physical phones.
       # Do not forward this port through the router.
       - "192.168.0.178:8008:8008"
+    dns:
+      # Docker's embedded DNS proxy (127.0.0.11) cannot correctly relay a raw
+      # DNS-protocol query for patrick-lamphier.com to the host's resolver,
+      # which synthesizes that answer from the host's own /etc/hosts
+      # override — so outbound pusher HTTP requests (Twisted's DNS client,
+      # which bypasses /etc/hosts/NSS entirely) fail resolution outright.
+      # The router correctly hairpins the real public IP back to this same
+      # host (confirmed working), so a real external resolver sidesteps the
+      # broken local-override path entirely.
+      - 1.1.1.1
+      - 8.8.8.8
     volumes:
       - ./data:/data
       - ./privacy.yaml:/config/privacy.yaml:ro

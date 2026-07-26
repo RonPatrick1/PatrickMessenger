@@ -68,5 +68,6 @@ app.*.map.json
 /liam_bot/target/
 *.jks
 *.keystore
+*.p8
 **/google-services.json
 **/GoogleService-Info.plist
