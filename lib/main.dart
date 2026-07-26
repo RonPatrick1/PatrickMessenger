@@ -36,10 +36,11 @@ Future<void> _startup() async {
   config.validate();
   final themeController = await ThemePreferenceController.load();
   final textScaleController = await TextScalePreferenceController.load();
-  final notificationController =
-      await NotificationPreferenceController.load();
+  final notificationController = await NotificationPreferenceController.load();
   final liamChatterVisibility = await LiamChatterVisibilityController.load();
-  final client = await MatrixClientFactory.create();
+  final client = await MatrixClientFactory.create(
+    homeserver: config.homeserver,
+  );
   final notificationService = MessageNotificationService(
     client,
     notificationController,

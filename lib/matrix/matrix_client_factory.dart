@@ -23,7 +23,7 @@ Future<void> _initializeVodozemac() {
 class MatrixClientFactory {
   static const _databaseName = 'patrick_messenger';
 
-  static Future<Client> create() async {
+  static Future<Client> create({required Uri homeserver}) async {
     await _initializeVodozemac();
 
     final supportDirectory = await getApplicationSupportDirectory();
@@ -56,7 +56,11 @@ class MatrixClientFactory {
       receiptsPublicByDefault: false,
       requestHistoryOnLimitedTimeline: true,
     );
-    await client.init();
+    // Always prefer the currently configured endpoint over the URL stored in
+    // an existing session. This preserves the access token, device identity,
+    // encryption account, and room keys while migrating older mobile sessions
+    // away from the private-LAN homeserver URL to the public HTTPS proxy.
+    await client.init(newHomeserver: homeserver);
     return client;
   }
 
