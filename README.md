@@ -141,7 +141,9 @@ logged into the same Matrix account is included; only the exact device that
 sent the message suppresses its own notification. Reliable delivery after iOS
 or Android suspends or terminates the app still requires the production
 APNs/FCM push gateway described in the architecture; local notifications alone
-cannot wake a stopped phone app.
+cannot wake a stopped phone app. The direct-from-Xcode APNs sandbox deployment
+and locked-iPhone verification steps are in
+[`server/README.md`](server/README.md#apple-push-notifications).
 
 With the message field focused, Control+V on Ubuntu or Command+V on macOS/iOS
 hardware keyboards sends a copied PNG, JPEG, GIF, or WebP picture through the
