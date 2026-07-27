@@ -92,6 +92,8 @@ class _ChatScreenState extends State<ChatScreen> {
   double? _pinchStartTextScale;
   List<User> _typingUsers = [];
   StreamSubscription<SyncUpdate>? _typingSubscription;
+  StreamSubscription<Event>? _timelineEventSubscription;
+  Timer? _timelineRefreshTimer;
   DateTime? _lastTypingNoticeSentAt;
   String? _highlightMessageId;
   bool _didJumpToInitialResult = false;
@@ -121,32 +123,29 @@ class _ChatScreenState extends State<ChatScreen> {
         setState(() {});
       }),
     );
-    widget.room
-        .getTimeline(
-          onUpdate: () {
-            if (!mounted) return;
-            setState(() {});
-            _markLatestMessageRead();
-          },
-        )
-        .then((timeline) {
-          if (!mounted) {
-            timeline.cancelSubscriptions();
-            return;
-          }
-          setState(() => _timeline = timeline);
-          unawaited(widget.searchIndex.indexTimeline(timeline));
-          _markLatestMessageRead();
-          unawaited(_recoverVisibleHistoryKeys(timeline));
-          final initialResult = widget.initialSearchResult;
-          if (initialResult != null) {
-            unawaited(_scrollToSearchResult(initialResult));
-          }
-        });
+    widget.room.getTimeline(onUpdate: _handleTimelineUpdate).then((timeline) {
+      if (!mounted) {
+        timeline.cancelSubscriptions();
+        return;
+      }
+      setState(() => _timeline = timeline);
+      _timelineEventSubscription = widget.room.client.onTimelineEvent.stream
+          .where((event) => event.roomId == widget.room.id)
+          .listen((_) => _scheduleTimelineRefresh());
+      unawaited(widget.searchIndex.indexTimeline(timeline));
+      _markLatestMessageRead();
+      unawaited(_recoverVisibleHistoryKeys(timeline));
+      final initialResult = widget.initialSearchResult;
+      if (initialResult != null) {
+        unawaited(_scrollToSearchResult(initialResult));
+      }
+    });
   }
 
   @override
   void dispose() {
+    _timelineRefreshTimer?.cancel();
+    _timelineEventSubscription?.cancel();
     _timeline?.cancelSubscriptions();
     _typingSubscription?.cancel();
     widget.liamChatterVisibility.removeListener(_handlePreferencesChanged);
@@ -156,6 +155,25 @@ class _ChatScreenState extends State<ChatScreen> {
     _messageController.dispose();
     _messageFocusNode.dispose();
     super.dispose();
+  }
+
+  void _handleTimelineUpdate() {
+    if (!mounted) return;
+    setState(() {});
+    _markLatestMessageRead();
+  }
+
+  void _scheduleTimelineRefresh() {
+    _timelineRefreshTimer?.cancel();
+    // Timeline events are broadcast before all asynchronous decryption and
+    // aggregation work has necessarily completed. Rebuild just after that
+    // work settles so a message cannot remain in the timeline/database while
+    // the already-open chat window stays stale.
+    _timelineRefreshTimer = Timer(const Duration(milliseconds: 150), () {
+      if (!mounted) return;
+      setState(() {});
+      _markLatestMessageRead();
+    });
   }
 
   void _handlePreferencesChanged() {
