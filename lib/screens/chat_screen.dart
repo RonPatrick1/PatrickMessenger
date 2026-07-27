@@ -75,6 +75,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final _itemScrollController = ItemScrollController();
   final _itemPositions = ItemPositionsListener.create();
   final _selectedEventIds = <String>{};
+  final _liveTimelineEvents = <String, Event>{};
 
   Timeline? _timeline;
   Event? _replyTo;
@@ -131,7 +132,7 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() => _timeline = timeline);
       _timelineEventSubscription = widget.room.client.onTimelineEvent.stream
           .where((event) => event.roomId == widget.room.id)
-          .listen((_) => _scheduleTimelineRefresh());
+          .listen(_handleLiveTimelineEvent);
       unawaited(widget.searchIndex.indexTimeline(timeline));
       _markLatestMessageRead();
       unawaited(_recoverVisibleHistoryKeys(timeline));
@@ -174,6 +175,15 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() {});
       _markLatestMessageRead();
     });
+  }
+
+  void _handleLiveTimelineEvent(Event event) {
+    _liveTimelineEvents[event.eventId] = event;
+    // Bound the fallback cache for conversations that stay open for days.
+    while (_liveTimelineEvents.length > 250) {
+      _liveTimelineEvents.remove(_liveTimelineEvents.keys.first);
+    }
+    _scheduleTimelineRefresh();
   }
 
   void _handlePreferencesChanged() {
@@ -272,7 +282,15 @@ class _ChatScreenState extends State<ChatScreen> {
     final hideLiamChatter = widget.liamChatterVisibility.isHidden(
       widget.room.id,
     );
-    return timeline.events
+    // Matrix normally inserts live events into Timeline before onUpdate. On
+    // iOS we have observed the client-wide event stream advancing while an
+    // already-open Timeline remains stale. Overlay those live events by ID so
+    // the chat cannot hide messages that the client has already received.
+    final visibleEvents = <String, Event>{
+      for (final event in timeline.events) event.eventId: event,
+      ..._liveTimelineEvents,
+    };
+    return visibleEvents.values
         .where(
           (event) =>
               (event.type == EventTypes.Message ||
