@@ -227,7 +227,10 @@ class SearchIndexService extends ChangeNotifier {
   }
 
   Future<void> indexTimeline(Timeline timeline) async {
-    for (final event in timeline.events) {
+    // timeline.events is the SDK's live list; awaiting inside the loop lets
+    // incoming sync events mutate it mid-iteration, which throws Concurrent
+    // modification. Iterate a snapshot instead.
+    for (final event in timeline.events.toList()) {
       await indexEvent(event);
     }
   }
