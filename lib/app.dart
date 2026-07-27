@@ -2,9 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart';
 
 import 'config/app_config.dart';
+import 'archive/archive_repository.dart';
 import 'notifications/liam_chatter_visibility.dart';
 import 'notifications/message_notification_service.dart';
 import 'notifications/notification_preferences.dart';
+import 'receipts/message_receipt_service.dart';
+import 'receipts/read_receipt_preferences.dart';
+import 'search/search_index_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/rooms_screen.dart';
 import 'settings/text_scale_preference.dart';
@@ -18,6 +22,10 @@ class PatrickMessengerApp extends StatelessWidget {
   final NotificationPreferenceController notificationController;
   final MessageNotificationService notificationService;
   final LiamChatterVisibilityController liamChatterVisibility;
+  final ArchiveRepository archives;
+  final SearchIndexService searchIndex;
+  final ReadReceiptPreferenceController readReceiptController;
+  final MessageReceiptService receiptService;
 
   const PatrickMessengerApp({
     required this.client,
@@ -27,6 +35,10 @@ class PatrickMessengerApp extends StatelessWidget {
     required this.notificationController,
     required this.notificationService,
     required this.liamChatterVisibility,
+    required this.archives,
+    required this.searchIndex,
+    required this.readReceiptController,
+    required this.receiptService,
     super.key,
   });
 
@@ -68,6 +80,10 @@ class PatrickMessengerApp extends StatelessWidget {
                       notificationController: notificationController,
                       notificationService: notificationService,
                       liamChatterVisibility: liamChatterVisibility,
+                      archives: archives,
+                      searchIndex: searchIndex,
+                      readReceiptController: readReceiptController,
+                      receiptService: receiptService,
                     )
                   : LoginScreen(
                       client: client,

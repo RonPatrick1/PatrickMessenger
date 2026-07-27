@@ -88,7 +88,8 @@ bool isLiamChatterEvent(Event event, {required String liamUserId}) {
 }
 
 bool isLiamChatterContent(Map<String, dynamic> content, String body) {
-  return isLiamAnswerContent(content, body) || extractLiamQuestion(body) != null;
+  return isLiamAnswerContent(content, body) ||
+      extractLiamQuestion(body) != null;
 }
 
 String typingIndicatorLabel({

@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart';
 
+import '../../archive/archive_contract.dart';
+import '../../archive/archive_repository.dart';
 import '../../matrix/display_names.dart';
+import '../../receipts/message_receipt_service.dart';
 import 'liam_icon.dart';
 import 'message_interactions.dart';
+import 'message_status_indicator.dart';
 
 class MessageBubble extends StatelessWidget {
   final Event event;
@@ -17,6 +21,8 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback onOpenActions;
   final VoidCallback onSelectionTap;
   final ValueChanged<String> onReaction;
+  final MessageReceiptService receiptService;
+  final ArchiveRoomData archive;
 
   const MessageBubble({
     required this.event,
@@ -30,6 +36,8 @@ class MessageBubble extends StatelessWidget {
     required this.onOpenActions,
     required this.onSelectionTap,
     required this.onReaction,
+    required this.receiptService,
+    required this.archive,
     super.key,
   });
 
@@ -113,6 +121,7 @@ class MessageBubble extends StatelessWidget {
                               event: event,
                               timeline: timeline,
                               textColor: textColor,
+                              archive: archive,
                             ),
                             _MessageContent(
                               event: displayEvent,
@@ -154,16 +163,17 @@ class MessageBubble extends StatelessWidget {
                                 ),
                                 if (mine) ...[
                                   const SizedBox(width: 4),
-                                  Icon(
-                                    event.receipts.any(
-                                          (receipt) =>
-                                              receipt.user.id !=
-                                              event.room.client.userID,
-                                        )
-                                        ? Icons.done_all
-                                        : Icons.done,
-                                    size: 15,
-                                    color: textColor.withValues(alpha: 0.75),
+                                  ListenableBuilder(
+                                    listenable: receiptService,
+                                    builder: (context, _) =>
+                                        MessageStatusIndicator(
+                                          summary: receiptService.summary(
+                                            event,
+                                          ),
+                                          color: textColor.withValues(
+                                            alpha: 0.75,
+                                          ),
+                                        ),
                                   ),
                                 ],
                                 if (!selectionMode && actionsEnabled) ...[
@@ -212,11 +222,13 @@ class _ReplyPreview extends StatefulWidget {
   final Event event;
   final Timeline timeline;
   final Color textColor;
+  final ArchiveRoomData archive;
 
   const _ReplyPreview({
     required this.event,
     required this.timeline,
     required this.textColor,
+    required this.archive,
   });
 
   @override
@@ -230,8 +242,28 @@ class _ReplyPreviewState extends State<_ReplyPreview> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.event.inReplyToEventId() == null) {
+    final archiveId = widget.event.content[archiveReplyKey]?.toString();
+    if (widget.event.inReplyToEventId() == null && archiveId == null) {
       return const SizedBox.shrink();
+    }
+    if (archiveId != null) {
+      final message = widget.archive.message(archiveId);
+      if (message == null) return const SizedBox.shrink();
+      return Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.fromLTRB(9, 7, 9, 7),
+        decoration: BoxDecoration(
+          color: widget.textColor.withValues(alpha: 0.08),
+          border: Border(left: BorderSide(color: widget.textColor, width: 3)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          '${message.authorName}: ${message.body}',
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      );
     }
     return FutureBuilder<Event?>(
       future: _reply,
@@ -345,17 +377,18 @@ class _MessageContent extends StatelessWidget {
           ),
         ],
       ),
-      _ => isLiamAnswer(event, liamUserId: liamUserId)
-          ? _LiamAnswerContent(event: event, textColor: textColor)
-          : SelectableText(
-              visibleMessageBody(event),
-              style: TextStyle(
-                color: textColor,
-                fontSize: event.onlyEmotes && event.numberEmotes <= 5
-                    ? 38
-                    : null,
+      _ =>
+        isLiamAnswer(event, liamUserId: liamUserId)
+            ? _LiamAnswerContent(event: event, textColor: textColor)
+            : SelectableText(
+                visibleMessageBody(event),
+                style: TextStyle(
+                  color: textColor,
+                  fontSize: event.onlyEmotes && event.numberEmotes <= 5
+                      ? 38
+                      : null,
+                ),
               ),
-            ),
     };
   }
 }

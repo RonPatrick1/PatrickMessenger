@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'app.dart';
+import 'archive/archive_repository.dart';
 import 'config/app_config.dart';
 import 'matrix/matrix_client_factory.dart';
 import 'notifications/android_message_connection_service.dart';
@@ -10,6 +11,10 @@ import 'notifications/ios_push_service.dart';
 import 'notifications/liam_chatter_visibility.dart';
 import 'notifications/message_notification_service.dart';
 import 'notifications/notification_preferences.dart';
+import 'notifications/push_classification_service.dart';
+import 'receipts/message_receipt_service.dart';
+import 'receipts/read_receipt_preferences.dart';
+import 'search/search_index_service.dart';
 import 'settings/text_scale_preference.dart';
 import 'settings/theme_preference.dart';
 
@@ -38,9 +43,19 @@ Future<void> _startup() async {
   final textScaleController = await TextScalePreferenceController.load();
   final notificationController = await NotificationPreferenceController.load();
   final liamChatterVisibility = await LiamChatterVisibilityController.load();
+  final readReceiptController = await ReadReceiptPreferenceController.load();
   final client = await MatrixClientFactory.create(
     homeserver: config.homeserver,
   );
+  await liamChatterVisibility.connect(client, config.liamUserId);
+  await readReceiptController.connect(client);
+  final pushClassificationService = PushClassificationService(client);
+  await pushClassificationService.initialize();
+  final archives = ArchiveRepository(client);
+  final searchIndex = SearchIndexService(client: client, archives: archives);
+  await searchIndex.initialize();
+  final receiptService = MessageReceiptService(client, readReceiptController);
+  await receiptService.initialize();
   final notificationService = MessageNotificationService(
     client,
     notificationController,
@@ -65,6 +80,10 @@ Future<void> _startup() async {
       notificationController: notificationController,
       notificationService: notificationService,
       liamChatterVisibility: liamChatterVisibility,
+      archives: archives,
+      searchIndex: searchIndex,
+      readReceiptController: readReceiptController,
+      receiptService: receiptService,
     ),
   );
   unawaited(androidMessageConnection.initialize());

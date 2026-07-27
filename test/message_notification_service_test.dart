@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:matrix/matrix.dart';
+import 'package:patrick_messenger/archive/archive_contract.dart';
 import 'package:patrick_messenger/notifications/message_notification_service.dart';
 
 void main() {
@@ -37,14 +38,21 @@ void main() {
     );
   });
 
-  test('does not notify for startup history, edits, or reactions', () {
-    expect(shouldNotify(ready: false), isFalse);
-    expect(shouldNotify(relationshipType: RelationshipTypes.edit), isFalse);
-    expect(shouldNotify(type: EventTypes.Reaction), isFalse);
-  });
+  test(
+    'does not notify for startup history, edits, controls, or reactions',
+    () {
+      expect(shouldNotify(ready: false), isFalse);
+      expect(shouldNotify(relationshipType: RelationshipTypes.edit), isFalse);
+      expect(shouldNotify(relationshipType: controlRelationType), isFalse);
+      expect(shouldNotify(type: EventTypes.Reaction), isFalse);
+    },
+  );
 
-  test('notifies for stickers and undecryptable encrypted messages', () {
-    expect(shouldNotify(type: EventTypes.Sticker), isTrue);
-    expect(shouldNotify(type: EventTypes.Encrypted), isTrue);
-  });
+  test(
+    'waits for decryption before notifying and still notifies for stickers',
+    () {
+      expect(shouldNotify(type: EventTypes.Sticker), isTrue);
+      expect(shouldNotify(type: EventTypes.Encrypted), isFalse);
+    },
+  );
 }

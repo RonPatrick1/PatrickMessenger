@@ -8,6 +8,7 @@ import 'package:matrix/matrix.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
+import '../archive/archive_contract.dart';
 import '../matrix/display_names.dart';
 import '../screens/chat/message_interactions.dart';
 import 'liam_chatter_visibility.dart';
@@ -263,7 +264,7 @@ class MessageNotificationService {
           ? '$sender invited you to $roomName.'
           : notificationPreview(event);
       final attachmentPath = _preferences.showPreviews
-          ? await _prepareAppleImagePreview(event)
+          ? await _prepareImagePreview(event)
           : null;
 
       await _show(
@@ -305,6 +306,15 @@ class MessageNotificationService {
           playSound: sound,
           enableVibration: true,
           category: AndroidNotificationCategory.message,
+          styleInformation: attachmentPath == null
+              ? null
+              : BigPictureStyleInformation(
+                  FilePathAndroidBitmap(attachmentPath),
+                  contentTitle: title,
+                  summaryText: body,
+                  hideExpandedLargeIcon: true,
+                  showBigPictureWhenCollapsed: true,
+                ),
         ),
         iOS: DarwinNotificationDetails(
           presentAlert: true,
@@ -342,8 +352,9 @@ class MessageNotificationService {
     );
   }
 
-  Future<String?> _prepareAppleImagePreview(Event event) async {
-    if ((defaultTargetPlatform != TargetPlatform.iOS &&
+  Future<String?> _prepareImagePreview(Event event) async {
+    if ((defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS &&
             defaultTargetPlatform != TargetPlatform.macOS) ||
         event.messageType != MessageTypes.Image) {
       return null;
@@ -406,11 +417,10 @@ bool shouldNotifyForTimelineEvent({
   required String? transactionId,
 }) {
   if (!timelineReady) return false;
+  if (relationshipType == controlRelationType) return false;
   if (relationshipType == RelationshipTypes.edit) return false;
   if (senderId == ownUserId && transactionId != null) return false;
-  return eventType == EventTypes.Message ||
-      eventType == EventTypes.Sticker ||
-      eventType == EventTypes.Encrypted;
+  return eventType == EventTypes.Message || eventType == EventTypes.Sticker;
 }
 
 String notificationPreview(Event event) {

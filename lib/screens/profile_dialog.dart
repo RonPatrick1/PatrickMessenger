@@ -4,12 +4,16 @@ import 'package:matrix/matrix.dart';
 import '../matrix/display_names.dart';
 import '../notifications/message_notification_service.dart';
 import '../notifications/notification_preferences.dart';
+import '../receipts/read_receipt_preferences.dart';
+import '../search/search_index_service.dart';
 
 Future<void> showAccountSettingsDialog({
   required BuildContext context,
   required Client client,
   required NotificationPreferenceController notificationController,
   required MessageNotificationService notificationService,
+  required ReadReceiptPreferenceController readReceiptController,
+  required SearchIndexService searchIndex,
 }) async {
   final userId = client.userID;
   if (userId == null) return;
@@ -33,6 +37,8 @@ Future<void> showAccountSettingsDialog({
       ),
       notificationController: notificationController,
       notificationService: notificationService,
+      readReceiptController: readReceiptController,
+      searchIndex: searchIndex,
     ),
   );
   if (saved == true && context.mounted) {
@@ -48,6 +54,8 @@ class _AccountSettingsDialog extends StatefulWidget {
   final String initialName;
   final NotificationPreferenceController notificationController;
   final MessageNotificationService notificationService;
+  final ReadReceiptPreferenceController readReceiptController;
+  final SearchIndexService searchIndex;
 
   const _AccountSettingsDialog({
     required this.client,
@@ -55,6 +63,8 @@ class _AccountSettingsDialog extends StatefulWidget {
     required this.initialName,
     required this.notificationController,
     required this.notificationService,
+    required this.readReceiptController,
+    required this.searchIndex,
   });
 
   @override
@@ -66,6 +76,7 @@ class _AccountSettingsDialogState extends State<_AccountSettingsDialog> {
   late bool _notificationsEnabled;
   late bool _soundEnabled;
   late bool _showPreviews;
+  late bool _sendReadReceipts;
   bool _saving = false;
   bool _testing = false;
   String? _error;
@@ -81,6 +92,7 @@ class _AccountSettingsDialogState extends State<_AccountSettingsDialog> {
     _notificationsEnabled = widget.notificationController.enabled;
     _soundEnabled = widget.notificationController.soundEnabled;
     _showPreviews = widget.notificationController.showPreviews;
+    _sendReadReceipts = widget.readReceiptController.enabled;
   }
 
   @override
@@ -152,6 +164,7 @@ class _AccountSettingsDialogState extends State<_AccountSettingsDialog> {
         soundEnabled: _soundEnabled,
         showPreviews: _showPreviews,
       );
+      await widget.readReceiptController.setEnabled(_sendReadReceipts);
       if (mounted) Navigator.pop(context, true);
     } catch (_) {
       if (mounted) {
@@ -240,6 +253,36 @@ class _AccountSettingsDialogState extends State<_AccountSettingsDialog> {
                   icon: const Icon(Icons.notification_add_outlined),
                   label: Text(
                     _testing ? 'Sending test…' : 'Send test notification',
+                  ),
+                ),
+              ),
+              const Divider(),
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                secondary: const Icon(Icons.done_all),
+                title: const Text('Read receipts'),
+                subtitle: const Text(
+                  'Let people know when you have opened their messages.',
+                ),
+                value: _sendReadReceipts,
+                onChanged: busy
+                    ? null
+                    : (value) => setState(() => _sendReadReceipts = value),
+              ),
+              ListenableBuilder(
+                listenable: widget.searchIndex,
+                builder: (context, _) => Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: busy || widget.searchIndex.rebuilding
+                        ? null
+                        : widget.searchIndex.rebuild,
+                    icon: const Icon(Icons.manage_search),
+                    label: Text(
+                      widget.searchIndex.rebuilding
+                          ? 'Rebuilding search index…'
+                          : 'Rebuild search index',
+                    ),
                   ),
                 ),
               ),

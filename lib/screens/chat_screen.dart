@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
@@ -6,14 +7,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:matrix/matrix.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
+import '../archive/archive_contract.dart';
+import '../archive/archive_models.dart';
+import '../archive/archive_repository.dart';
 import '../history/timeline_key_recovery.dart';
 import '../matrix/display_names.dart';
 import '../notifications/liam_chatter_visibility.dart';
+import '../receipts/message_receipt_service.dart';
+import '../search/media_ocr_service.dart';
+import '../search/search_index_service.dart';
 import '../services/chat_clipboard.dart';
 import '../services/giphy_client.dart';
 import '../settings/text_scale_preference.dart';
 import 'chat/chat_composer.dart';
+import 'chat/archive_message_bubble.dart';
 import 'chat/emoji_picker_dialog.dart';
 import 'chat/giphy_picker_dialog.dart';
 import 'chat/message_action_dialog.dart';
@@ -21,6 +30,7 @@ import 'chat/message_bubble.dart';
 import 'chat/message_interactions.dart';
 import 'chat/rename_conversation_dialog.dart';
 import 'chat/typing_indicator.dart';
+import 'search_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final Room room;
@@ -28,6 +38,10 @@ class ChatScreen extends StatefulWidget {
   final String liamUserId;
   final TextScalePreferenceController textScaleController;
   final LiamChatterVisibilityController liamChatterVisibility;
+  final ArchiveRoomData archive;
+  final SearchIndexService searchIndex;
+  final MessageReceiptService receiptService;
+  final MessageSearchResult? initialSearchResult;
 
   const ChatScreen({
     required this.room,
@@ -35,6 +49,10 @@ class ChatScreen extends StatefulWidget {
     required this.liamUserId,
     required this.textScaleController,
     required this.liamChatterVisibility,
+    required this.archive,
+    required this.searchIndex,
+    required this.receiptService,
+    this.initialSearchResult,
     super.key,
   });
 
@@ -45,12 +63,15 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _messageController = TextEditingController();
   final _messageFocusNode = FocusNode();
-  final _scrollController = ScrollController();
+  final _itemScrollController = ItemScrollController();
+  final _itemPositions = ItemPositionsListener.create();
   final _selectedEventIds = <String>{};
 
   Timeline? _timeline;
   Event? _replyTo;
   Event? _editingEvent;
+  ArchiveMessage? _archiveReplyTo;
+  ArchiveMessage? _editingArchiveMessage;
   bool _sendingAttachment = false;
   bool _invitingLiam = false;
   bool _loadingHistory = false;
@@ -58,6 +79,9 @@ class _ChatScreenState extends State<ChatScreen> {
   List<User> _typingUsers = [];
   StreamSubscription<SyncUpdate>? _typingSubscription;
   DateTime? _lastTypingNoticeSentAt;
+  String? _highlightMessageId;
+  bool _didJumpToInitialResult = false;
+  int _visibleItemCount = 0;
 
   bool get _selectionMode => _selectedEventIds.isNotEmpty;
   bool get _liamJoined => widget.room
@@ -67,12 +91,20 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    _scrollController.addListener(_handleScroll);
+    _itemPositions.itemPositions.addListener(_handleScroll);
     _messageController.addListener(_handleComposerTextChanged);
     _typingSubscription = widget.room.client.onSync.stream.listen(
       (_) => _refreshTypingUsers(),
     );
     widget.liamChatterVisibility.addListener(_handlePreferencesChanged);
+    widget.archive.addListener(_handleArchiveChanged);
+    unawaited(
+      widget.archive.load().then((_) {
+        if (!mounted) return;
+        unawaited(widget.searchIndex.indexArchiveRoom(widget.archive));
+        setState(() {});
+      }),
+    );
     widget.room
         .getTimeline(
           onUpdate: () {
@@ -87,6 +119,7 @@ class _ChatScreenState extends State<ChatScreen> {
             return;
           }
           setState(() => _timeline = timeline);
+          unawaited(widget.searchIndex.indexTimeline(timeline));
           _markLatestMessageRead();
           unawaited(_recoverVisibleHistoryKeys(timeline));
         });
@@ -97,9 +130,8 @@ class _ChatScreenState extends State<ChatScreen> {
     _timeline?.cancelSubscriptions();
     _typingSubscription?.cancel();
     widget.liamChatterVisibility.removeListener(_handlePreferencesChanged);
-    _scrollController
-      ..removeListener(_handleScroll)
-      ..dispose();
+    widget.archive.removeListener(_handleArchiveChanged);
+    _itemPositions.itemPositions.removeListener(_handleScroll);
     _messageController.removeListener(_handleComposerTextChanged);
     _messageController.dispose();
     _messageFocusNode.dispose();
@@ -108,6 +140,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _handlePreferencesChanged() {
     if (mounted) setState(() {});
+  }
+
+  void _handleArchiveChanged() {
+    if (!mounted) return;
+    unawaited(widget.searchIndex.indexArchiveRoom(widget.archive));
+    setState(() {});
   }
 
   Future<void> _toggleLiamChatterHidden() async {
@@ -144,9 +182,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _typingLabel() {
-    final liamTyping = _typingUsers.any(
-      (user) => user.id == widget.liamUserId,
-    );
+    final liamTyping = _typingUsers.any((user) => user.id == widget.liamUserId);
     final otherNames = _typingUsers
         .where((user) => user.id != widget.liamUserId)
         .map(readableMatrixUserName)
@@ -158,9 +194,11 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _handleScroll() {
-    if (!_scrollController.hasClients || _loadingHistory) return;
-    final position = _scrollController.position;
-    if (position.pixels >= position.maxScrollExtent - 320) {
+    if (_loadingHistory || _visibleItemCount == 0) return;
+    final positions = _itemPositions.itemPositions.value;
+    if (positions.isNotEmpty &&
+        positions.map((position) => position.index).reduce(max) >=
+            _visibleItemCount - 3) {
       unawaited(_loadMoreHistory());
     }
   }
@@ -208,6 +246,65 @@ class _ChatScreenState extends State<ChatScreen> {
         .toList();
   }
 
+  List<_ChatItem> _chatItems(Timeline timeline) {
+    final items = <_ChatItem>[
+      ..._messages(timeline).map(_ChatItem.matrix),
+      ...widget.archive.messages.map(_ChatItem.archive),
+    ];
+    items.sort((a, b) {
+      final time = b.timestamp.compareTo(a.timestamp);
+      return time != 0 ? time : b.id.compareTo(a.id);
+    });
+    return items;
+  }
+
+  void _scheduleJumpToResult(List<_ChatItem> items) {
+    final result = widget.initialSearchResult;
+    if (_didJumpToInitialResult || result == null) return;
+    final index = items.indexWhere((item) => item.id == result.sourceId);
+    if (index < 0) return;
+    _didJumpToInitialResult = true;
+    _highlightMessageId = result.sourceId;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_itemScrollController.isAttached) return;
+      _itemScrollController.jumpTo(index: index);
+      Future<void>.delayed(const Duration(seconds: 3), () {
+        if (mounted) setState(() => _highlightMessageId = null);
+      });
+    });
+  }
+
+  Future<void> _openSearch() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => MessageSearchScreen(
+          client: widget.room.client,
+          searchIndex: widget.searchIndex,
+          roomId: widget.room.id,
+          openResult: (result) {
+            Navigator.of(context).pop();
+            final timeline = _timeline;
+            if (timeline == null) return;
+            final items = _chatItems(timeline);
+            final index = items.indexWhere(
+              (item) => item.id == result.sourceId,
+            );
+            if (index < 0) return;
+            setState(() => _highlightMessageId = result.sourceId);
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!_itemScrollController.isAttached) return;
+              _itemScrollController.scrollTo(
+                index: index,
+                duration: const Duration(milliseconds: 350),
+                curve: Curves.easeOut,
+              );
+            });
+          },
+        ),
+      ),
+    );
+  }
+
   int _hiddenLiamChatterCount(Timeline timeline) {
     if (!widget.liamChatterVisibility.isHidden(widget.room.id)) return 0;
     return timeline.events
@@ -229,11 +326,16 @@ class _ChatScreenState extends State<ChatScreen> {
     final latest = messages.where((event) => event.status.isSent).firstOrNull;
     if (latest == null) return;
     unawaited(_setReadMarker(latest.eventId));
+    unawaited(widget.receiptService.markRead(messages.take(100)));
   }
 
   Future<void> _setReadMarker(String eventId) async {
     try {
-      await widget.room.setReadMarker(eventId, mRead: eventId, public: false);
+      await widget.room.setReadMarker(
+        eventId,
+        mRead: eventId,
+        public: widget.receiptService.preferences.enabled,
+      );
     } catch (_) {
       // A timeline event can disappear during a sync race. The next timeline
       // update will retry with the latest server-confirmed event.
@@ -246,7 +348,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final replyTo = _replyTo;
     final editingEvent = _editingEvent;
-    final liamQuestion = editingEvent == null
+    final editingArchiveMessage = _editingArchiveMessage;
+    final archiveReplyTo = _archiveReplyTo;
+    final liamQuestion = editingEvent == null && editingArchiveMessage == null
         ? extractLiamQuestion(message)
         : null;
     if (liamQuestion != null) {
@@ -262,11 +366,30 @@ class _ChatScreenState extends State<ChatScreen> {
     unawaited(widget.room.setTyping(false));
     _cancelComposerContext();
     try {
-      await widget.room.sendTextEvent(
-        message,
-        inReplyTo: editingEvent == null ? replyTo : null,
-        editEventId: editingEvent?.eventId,
-      );
+      if (editingArchiveMessage != null) {
+        await widget.archive.edit(editingArchiveMessage.id, message);
+      } else if (editingEvent != null) {
+        await widget.room.sendTextEvent(
+          message,
+          editEventId: editingEvent.eventId,
+        );
+      } else {
+        final content = <String, dynamic>{
+          'msgtype': MessageTypes.Text,
+          'body': message,
+          messageRecipientsKey: _receiptRecipients(),
+          if (archiveReplyTo != null) archiveReplyKey: archiveReplyTo.id,
+          if (liamQuestion != null && _relationRootEventId().isNotEmpty)
+            'm.relates_to': {
+              'rel_type': liamChatterRelationType,
+              'event_id': _relationRootEventId(),
+            },
+        };
+        await widget.room.sendEvent(
+          content,
+          inReplyTo: liamQuestion == null ? replyTo : null,
+        );
+      }
     } catch (_) {
       if (!mounted) return;
       _showError(
@@ -278,9 +401,19 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() {
         _replyTo = replyTo;
         _editingEvent = editingEvent;
+        _archiveReplyTo = archiveReplyTo;
+        _editingArchiveMessage = editingArchiveMessage;
       });
     }
   }
+
+  List<String> _receiptRecipients() => widget.room
+      .getParticipants(const [Membership.join])
+      .map((user) => user.id)
+      .where((id) => id != widget.room.client.userID && id != widget.liamUserId)
+      .toList(growable: false);
+
+  String _relationRootEventId() => widget.room.lastEvent?.eventId ?? '';
 
   Future<bool> _ensureLiamJoined() async {
     if (_liamJoined) return true;
@@ -355,9 +488,12 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _prepareLiamQuestion() {
-    if (_editingEvent != null) {
+    if (_editingEvent != null || _editingArchiveMessage != null) {
       _messageController.clear();
-      setState(() => _editingEvent = null);
+      setState(() {
+        _editingEvent = null;
+        _editingArchiveMessage = null;
+      });
     }
     _messageController.value = withLiamPrefix(_messageController.value);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -368,7 +504,16 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _removeLiam() async {
     if (!_liamJoined) return;
     try {
-      await widget.room.sendTextEvent(liamLeaveCommand);
+      await widget.room.sendEvent({
+        'msgtype': MessageTypes.Text,
+        'body': liamLeaveCommand,
+        messageRecipientsKey: _receiptRecipients(),
+        if (_relationRootEventId().isNotEmpty)
+          'm.relates_to': {
+            'rel_type': liamChatterRelationType,
+            'event_id': _relationRootEventId(),
+          },
+      });
     } catch (_) {
       if (mounted) _showError('Liam could not be removed right now.');
     }
@@ -521,10 +666,16 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       final preserveAnimation =
           isAnimatedGifName(name) || image.mimeType == 'image/gif';
+      final ocr = await MediaOcrService().recognizeImage(bytes, name);
       await widget.room.sendFileEvent(
         image,
         inReplyTo: _replyTo,
         shrinkImageMaxDimension: preserveAnimation ? null : 1600,
+        extraContent: {
+          messageRecipientsKey: _receiptRecipients(),
+          if (_archiveReplyTo != null) archiveReplyKey: _archiveReplyTo!.id,
+          if (ocr != null) mediaOcrKey: ocr,
+        },
       );
       if (mounted) _cancelComposerContext();
     } catch (_) {
@@ -556,6 +707,10 @@ class _ChatScreenState extends State<ChatScreen> {
         image,
         inReplyTo: _replyTo,
         shrinkImageMaxDimension: null,
+        extraContent: {
+          messageRecipientsKey: _receiptRecipients(),
+          if (_archiveReplyTo != null) archiveReplyKey: _archiveReplyTo!.id,
+        },
       );
       if (mounted) _cancelComposerContext();
     } on GiphyException catch (error) {
@@ -573,6 +728,8 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _replyTo = null;
       _editingEvent = null;
+      _archiveReplyTo = null;
+      _editingArchiveMessage = null;
     });
   }
 
@@ -580,6 +737,30 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _replyTo = event;
       _editingEvent = null;
+      _archiveReplyTo = null;
+      _editingArchiveMessage = null;
+    });
+  }
+
+  void _startArchiveReply(ArchiveMessage message) {
+    setState(() {
+      _archiveReplyTo = message;
+      _editingArchiveMessage = null;
+      _replyTo = null;
+      _editingEvent = null;
+    });
+  }
+
+  void _startArchiveEdit(ArchiveMessage message) {
+    setState(() {
+      _editingArchiveMessage = message;
+      _archiveReplyTo = null;
+      _editingEvent = null;
+      _replyTo = null;
+      _messageController.text = message.body;
+      _messageController.selection = TextSelection.collapsed(
+        offset: message.body.length,
+      );
     });
   }
 
@@ -588,6 +769,8 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _editingEvent = event;
       _replyTo = null;
+      _archiveReplyTo = null;
+      _editingArchiveMessage = null;
       _messageController.text = visibleMessageBody(displayEvent);
       _messageController.selection = TextSelection.collapsed(
         offset: _messageController.text.length,
@@ -638,6 +821,145 @@ class _ChatScreenState extends State<ChatScreen> {
         await _cancelSendEvent(event);
       case MessageAction.delete:
         await _deleteEvents([event]);
+    }
+  }
+
+  Future<void> _openArchiveMessageActions(ArchiveMessage message) async {
+    final mine = message.authorMatrixId == widget.room.client.userID;
+    final action = await showModalBottomSheet<_ArchiveAction>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.add_reaction_outlined),
+              title: const Text('React'),
+              onTap: () => Navigator.pop(sheetContext, _ArchiveAction.react),
+            ),
+            ListTile(
+              leading: const Icon(Icons.reply),
+              title: const Text('Reply'),
+              onTap: () => Navigator.pop(sheetContext, _ArchiveAction.reply),
+            ),
+            if (mine && message.body.isNotEmpty && !message.deleted)
+              ListTile(
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text('Edit'),
+                onTap: () => Navigator.pop(sheetContext, _ArchiveAction.edit),
+              ),
+            if (message.body.isNotEmpty && !message.deleted)
+              ListTile(
+                leading: const Icon(Icons.content_copy_outlined),
+                title: const Text('Copy text'),
+                onTap: () => Navigator.pop(sheetContext, _ArchiveAction.copy),
+              ),
+            ListTile(
+              leading: const Icon(Icons.forward_outlined),
+              title: const Text('Forward'),
+              onTap: () => Navigator.pop(sheetContext, _ArchiveAction.forward),
+            ),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('Info'),
+              onTap: () => Navigator.pop(sheetContext, _ArchiveAction.info),
+            ),
+            if (mine && !message.deleted)
+              ListTile(
+                leading: Icon(
+                  Icons.delete_outline,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+                title: Text(
+                  'Delete for everyone',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+                onTap: () => Navigator.pop(sheetContext, _ArchiveAction.delete),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case _ArchiveAction.react:
+        final emoji = await pickReactionEmoji(context);
+        if (emoji != null) {
+          await widget.archive.toggleReaction(message.id, emoji);
+        }
+      case _ArchiveAction.reply:
+        _startArchiveReply(message);
+      case _ArchiveAction.edit:
+        _startArchiveEdit(message);
+      case _ArchiveAction.copy:
+        await Clipboard.setData(ClipboardData(text: message.body));
+        if (mounted) _showStatus('Copied to clipboard.');
+      case _ArchiveAction.forward:
+        await _forwardArchiveMessage(message);
+      case _ArchiveAction.info:
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Imported message information'),
+            content: SelectionArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _InfoRow(label: 'From', value: message.authorName),
+                  _InfoRow(
+                    label: 'Sent',
+                    value: message.timestamp.toLocal().toString(),
+                  ),
+                  _InfoRow(label: 'Source', value: 'Signal history import'),
+                  _InfoRow(label: 'Archive ID', value: message.id),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
+        );
+      case _ArchiveAction.delete:
+        await widget.archive.delete(message.id);
+    }
+  }
+
+  Future<void> _forwardArchiveMessage(ArchiveMessage message) async {
+    final target = await _chooseForwardRoom();
+    if (target == null) return;
+    try {
+      if (message.body.isNotEmpty) await target.sendTextEvent(message.body);
+      for (final attachment in message.attachments.where(
+        (item) => !item.missing,
+      )) {
+        final bytes = await widget.archive.loadAttachment(attachment);
+        if (attachment.isImage) {
+          final image = await MatrixImageFile.create(
+            bytes: bytes,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            nativeImplementations: target.client.nativeImplementations,
+          );
+          await target.sendFileEvent(image);
+        } else {
+          await target.sendFileEvent(
+            MatrixFile(
+              bytes: bytes,
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+            ),
+          );
+        }
+      }
+      if (mounted) _showStatus('Forwarded securely.');
+    } catch (_) {
+      if (mounted) _showError('The imported message could not be forwarded.');
     }
   }
 
@@ -966,7 +1288,11 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final timeline = _timeline;
-    final messages = timeline == null ? const <Event>[] : _messages(timeline);
+    final messages = timeline == null
+        ? const <_ChatItem>[]
+        : _chatItems(timeline);
+    _visibleItemCount = messages.length;
+    _scheduleJumpToResult(messages);
     final selected = timeline == null
         ? const <Event>[]
         : _selectedEvents(timeline);
@@ -985,6 +1311,11 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
               title: Text('${_selectedEventIds.length} selected'),
               actions: [
+                IconButton(
+                  onPressed: _openSearch,
+                  tooltip: 'Search this conversation',
+                  icon: const Icon(Icons.search),
+                ),
                 IconButton(
                   onPressed: () => _copyEvents(selected),
                   tooltip: 'Copy text',
@@ -1029,10 +1360,13 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
               actions: [
                 IconButton(
+                  onPressed: _openSearch,
+                  tooltip: 'Search this conversation',
+                  icon: const Icon(Icons.search),
+                ),
+                IconButton(
                   onPressed: _toggleLiamChatterHidden,
-                  tooltip: widget.liamChatterVisibility.isHidden(
-                    widget.room.id,
-                  )
+                  tooltip: widget.liamChatterVisibility.isHidden(widget.room.id)
                       ? 'Show Liam chatter in this conversation'
                       : 'Hide Liam chatter in this conversation',
                   icon: Icon(
@@ -1060,8 +1394,9 @@ class _ChatScreenState extends State<ChatScreen> {
                     onScaleEnd: _finishTextPinch,
                     child: messages.isEmpty
                         ? const _EmptyConversation()
-                        : ListView.builder(
-                            controller: _scrollController,
+                        : ScrollablePositionedList.builder(
+                            itemScrollController: _itemScrollController,
+                            itemPositionsListener: _itemPositions,
                             reverse: true,
                             padding: const EdgeInsets.fromLTRB(14, 12, 14, 18),
                             itemCount:
@@ -1084,29 +1419,72 @@ class _ChatScreenState extends State<ChatScreen> {
                                   ),
                                 );
                               }
-                              final event = messages[index];
+                              final item = messages[index];
+                              final archiveMessage = item.archiveMessage;
+                              if (archiveMessage != null) {
+                                return AnimatedContainer(
+                                  duration: const Duration(milliseconds: 250),
+                                  color: _highlightMessageId == item.id
+                                      ? Theme.of(context)
+                                            .colorScheme
+                                            .tertiaryContainer
+                                            .withValues(alpha: 0.35)
+                                      : Colors.transparent,
+                                  child: ArchiveMessageBubble(
+                                    key: ValueKey(item.id),
+                                    message: archiveMessage,
+                                    archive: widget.archive,
+                                    mine:
+                                        archiveMessage.authorMatrixId ==
+                                        widget.room.client.userID,
+                                    onOpenActions: () =>
+                                        _openArchiveMessageActions(
+                                          archiveMessage,
+                                        ),
+                                    onReaction: (emoji) =>
+                                        widget.archive.toggleReaction(
+                                          archiveMessage.id,
+                                          emoji,
+                                        ),
+                                  ),
+                                );
+                              }
+                              final event = item.event!;
                               final actionsEnabled = !isUndecryptableEvent(
                                 event,
                               );
-                              return MessageBubble(
-                                key: ValueKey(event.eventId),
-                                event: event,
-                                timeline: timeline,
-                                mine:
-                                    event.senderId == widget.room.client.userID,
-                                selectionMode: _selectionMode,
-                                selected: _selectedEventIds.contains(
-                                  event.eventId,
+                              return AnimatedContainer(
+                                duration: const Duration(milliseconds: 250),
+                                color: _highlightMessageId == item.id
+                                    ? Theme.of(context)
+                                          .colorScheme
+                                          .tertiaryContainer
+                                          .withValues(alpha: 0.35)
+                                    : Colors.transparent,
+                                child: MessageBubble(
+                                  key: ValueKey(event.eventId),
+                                  event: event,
+                                  timeline: timeline,
+                                  mine:
+                                      event.senderId ==
+                                      widget.room.client.userID,
+                                  selectionMode: _selectionMode,
+                                  selected: _selectedEventIds.contains(
+                                    event.eventId,
+                                  ),
+                                  pinned: widget.room.pinnedEventIds.contains(
+                                    event.eventId,
+                                  ),
+                                  actionsEnabled: actionsEnabled,
+                                  liamUserId: widget.liamUserId,
+                                  receiptService: widget.receiptService,
+                                  archive: widget.archive,
+                                  onOpenActions: () =>
+                                      _openMessageActions(event),
+                                  onSelectionTap: () => _toggleSelected(event),
+                                  onReaction: (emoji) =>
+                                      _toggleReaction(event, emoji),
                                 ),
-                                pinned: widget.room.pinnedEventIds.contains(
-                                  event.eventId,
-                                ),
-                                actionsEnabled: actionsEnabled,
-                                liamUserId: widget.liamUserId,
-                                onOpenActions: () => _openMessageActions(event),
-                                onSelectionTap: () => _toggleSelected(event),
-                                onReaction: (emoji) =>
-                                    _toggleReaction(event, emoji),
                               );
                             },
                           ),
@@ -1133,16 +1511,22 @@ class _ChatScreenState extends State<ChatScreen> {
                     focusNode: _messageFocusNode,
                     sendingAttachment: _sendingAttachment,
                     liamJoined: _liamJoined,
-                    contextLabel: _editingEvent != null
+                    contextLabel:
+                        _editingEvent != null || _editingArchiveMessage != null
                         ? 'Editing message'
                         : _replyTo != null
                         ? 'Replying to ${readableMatrixUserName(_replyTo!.senderFromMemoryOrFallback)}'
+                        : _archiveReplyTo != null
+                        ? 'Replying to ${_archiveReplyTo!.authorName}'
                         : null,
-                    contextPreview: contextEvent == null
-                        ? null
-                        : visibleMessageBody(
-                            contextEvent.getDisplayEvent(timeline),
-                          ),
+                    contextPreview:
+                        _editingArchiveMessage?.body ??
+                        _archiveReplyTo?.body ??
+                        (contextEvent == null
+                            ? null
+                            : visibleMessageBody(
+                                contextEvent.getDisplayEvent(timeline),
+                              )),
                     onCancelContext: _cancelComposerContext,
                     onSend: _sendText,
                     onPaste: _pasteFromClipboard,
@@ -1155,6 +1539,22 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
     );
   }
+}
+
+enum _ArchiveAction { react, reply, edit, copy, forward, info, delete }
+
+class _ChatItem {
+  final Event? event;
+  final ArchiveMessage? archiveMessage;
+
+  const _ChatItem._({this.event, this.archiveMessage});
+
+  factory _ChatItem.matrix(Event event) => _ChatItem._(event: event);
+  factory _ChatItem.archive(ArchiveMessage message) =>
+      _ChatItem._(archiveMessage: message);
+
+  String get id => event?.eventId ?? archiveMessage!.id;
+  DateTime get timestamp => event?.originServerTs ?? archiveMessage!.timestamp;
 }
 
 class _InfoRow extends StatelessWidget {

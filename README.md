@@ -20,6 +20,9 @@ The first milestone currently provides:
 - encrypted picture sending from the system clipboard;
 - private local Ollama questions through the optional Liam assistant;
 - encrypted message-history recovery for adding new devices;
+- encrypted Signal-history import with original dates and media;
+- private local search across messages, filenames, captions, and picture OCR;
+- sent, delivered, and read indicators with per-member group counts;
 - persistent System, Light, and Dark appearance choices;
 - per-device message notification, sound, and lock-screen-preview choices;
 - a local, privacy-hardened Synapse development server;
@@ -131,6 +134,58 @@ previews on to include the readable sender and message text. **Send test
 notification** requests the phone's OS permission when needed and verifies the
 current sound choice.
 
+Read receipts are enabled by default and can be disabled in the same Account
+settings dialog. Sent messages use one circled check, delivered messages use
+two outlined circled checks, and read messages use two filled circled checks.
+In a group, a partial status also shows the number of recipients who have
+delivered or read the message. This receipt metadata is sent inside the
+encrypted room; the server does not receive message text.
+
+### Import Signal history
+
+The importer stores Signal history as encrypted, versioned archive chunks in
+the existing Matrix room. Clients merge those records with normal Matrix
+events by their original timestamp, so imported text and media appear in the
+correct part of the conversation rather than as thousands of new messages.
+Edits, reactions, replies, forwarding, copying, information, and
+delete-for-everyone use small encrypted overlay events and do not rewrite the
+original archive.
+
+First validate an export without uploading anything:
+
+```sh
+dart run tooling/import_signal_history.dart \
+  --source /home/ronpatrick/Documents/Elizabeth/signal-export-2026-07-22-07-22-23 \
+  --scan-only
+```
+
+Then perform the resumable import. It asks for Ron's Matrix password without
+echoing it and asks for confirmation before uploading. The importer uses its
+own Matrix device and keeps a private checkpoint under
+`~/.patrick-messenger-import/`, so rerunning the same command resumes rather
+than duplicating uploaded media.
+
+```sh
+dart run tooling/import_signal_history.dart \
+  --source /home/ronpatrick/Documents/Elizabeth/signal-export-2026-07-22-07-22-23
+```
+
+Picture OCR is performed locally with Tesseract when available. Use
+`--skip-ocr` only if searchable text inside imported pictures is not wanted.
+No Signal export text is sent to an OCR cloud service.
+
+### Search
+
+Use the search button on the Messages screen to search every conversation, or
+the search button inside a chat to restrict results to that chat. The Media
+filter searches filenames, captions, and locally recognized text in pictures.
+Opening a result returns to the message in context. Account settings includes
+a **Rebuild search index** button for a full rescan of encrypted history.
+
+The search database stores keyed token hashes and message identifiers, not
+plaintext message bodies or OCR text. Each candidate result is decrypted and
+verified before it is shown. Search and OCR therefore remain on the device.
+
 Computer-style account names such as `ron_patrick` are displayed as
 `Ron Patrick` until a display name is chosen. Use the pencil button in a
 conversation header to rename that conversation.
@@ -192,6 +247,11 @@ one-to-one or group room. While Liam is present, every participant can see that
 membership. Any participant can choose **Remove Liam**; the app sends the
 public room command `Liam: leave this conversation`, and the bot leaves without
 requiring moderator power.
+
+Hiding Liam is a per-user, per-room preference synchronized across that
+user's devices. It hides Liam questions and replies and installs matching
+Matrix push rules, so hidden Liam chatter does not create notifications.
+Other participants keep their own independent visibility choice.
 
 Liam downloads encrypted Matrix history that its bot device is authorized and
 able to decrypt until it has enough of the newest readable text to fill the

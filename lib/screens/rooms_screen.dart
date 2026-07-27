@@ -2,16 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart';
 
 import '../config/app_config.dart';
+import '../archive/archive_repository.dart';
 import '../matrix/display_names.dart';
 import '../matrix/room_rename_permissions.dart';
 import '../notifications/liam_chatter_visibility.dart';
 import '../notifications/message_notification_service.dart';
 import '../notifications/notification_preferences.dart';
+import '../receipts/message_receipt_service.dart';
+import '../receipts/read_receipt_preferences.dart';
+import '../search/search_index_service.dart';
 import '../settings/text_scale_preference.dart';
 import '../settings/theme_preference.dart';
 import 'chat_screen.dart';
 import 'history_recovery_dialog.dart';
 import 'profile_dialog.dart';
+import 'search_screen.dart';
 
 class RoomsScreen extends StatelessWidget {
   final Client client;
@@ -21,6 +26,10 @@ class RoomsScreen extends StatelessWidget {
   final NotificationPreferenceController notificationController;
   final MessageNotificationService notificationService;
   final LiamChatterVisibilityController liamChatterVisibility;
+  final ArchiveRepository archives;
+  final SearchIndexService searchIndex;
+  final ReadReceiptPreferenceController readReceiptController;
+  final MessageReceiptService receiptService;
 
   const RoomsScreen({
     required this.client,
@@ -30,6 +39,10 @@ class RoomsScreen extends StatelessWidget {
     required this.notificationController,
     required this.notificationService,
     required this.liamChatterVisibility,
+    required this.archives,
+    required this.searchIndex,
+    required this.readReceiptController,
+    required this.receiptService,
     super.key,
   });
 
@@ -40,6 +53,19 @@ class RoomsScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Messages'),
         actions: [
+          IconButton(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => MessageSearchScreen(
+                  client: client,
+                  searchIndex: searchIndex,
+                  openResult: (result) => _openSearchResult(context, result),
+                ),
+              ),
+            ),
+            tooltip: 'Search all conversations',
+            icon: const Icon(Icons.search),
+          ),
           ThemePreferenceMenuButton(controller: themeController),
           IconButton(
             onPressed: () =>
@@ -61,6 +87,8 @@ class RoomsScreen extends StatelessWidget {
                     client: client,
                     notificationController: notificationController,
                     notificationService: notificationService,
+                    readReceiptController: readReceiptController,
+                    searchIndex: searchIndex,
                   );
                 case _AccountAction.signOut:
                   await client.logout();
@@ -134,7 +162,11 @@ class RoomsScreen extends StatelessWidget {
     );
   }
 
-  Future<void> _openRoom(BuildContext context, Room room) async {
+  Future<void> _openRoom(
+    BuildContext context,
+    Room room, {
+    MessageSearchResult? initialResult,
+  }) async {
     if (room.membership == Membership.invite) {
       final accepted = await showDialog<bool>(
         context: context,
@@ -186,9 +218,23 @@ class RoomsScreen extends StatelessWidget {
           liamUserId: config.liamUserId,
           textScaleController: textScaleController,
           liamChatterVisibility: liamChatterVisibility,
+          archive: archives.forRoom(room),
+          searchIndex: searchIndex,
+          receiptService: receiptService,
+          initialSearchResult: initialResult,
         ),
       ),
     );
+  }
+
+  Future<void> _openSearchResult(
+    BuildContext searchContext,
+    MessageSearchResult result,
+  ) async {
+    final room = client.getRoomById(result.roomId);
+    if (room == null) return;
+    Navigator.of(searchContext).pop();
+    await _openRoom(searchContext, room, initialResult: result);
   }
 
   Future<void> _startConversation(BuildContext context) async {

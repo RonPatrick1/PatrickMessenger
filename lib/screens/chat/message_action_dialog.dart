@@ -37,7 +37,7 @@ List<MessageAction> availableMessageActions({
   required bool mine,
   required bool isText,
   required bool canRedact,
-  required EventStatus status,
+  EventStatus status = EventStatus.synced,
 }) {
   return [
     MessageAction.reply,

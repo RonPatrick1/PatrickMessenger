@@ -1,6 +1,7 @@
 import Flutter
 import UIKit
 import UserNotifications
+import Vision
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -61,6 +62,39 @@ import UserNotifications
       }
     }
     apnsChannel = channel
+
+    let ocrChannel = FlutterMethodChannel(
+      name: "com.patricklamphier.patrickMessenger/ocr",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    ocrChannel.setMethodCallHandler { call, result in
+      guard call.method == "recognize",
+            let arguments = call.arguments as? [String: Any],
+            let data = arguments["bytes"] as? FlutterStandardTypedData else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      DispatchQueue.global(qos: .userInitiated).async {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+        do {
+          try VNImageRequestHandler(data: data.data).perform([request])
+          let text = (request.results ?? [])
+            .compactMap { $0.topCandidates(1).first?.string }
+            .joined(separator: "\n")
+          DispatchQueue.main.async { result(text) }
+        } catch {
+          DispatchQueue.main.async {
+            result(FlutterError(
+              code: "ocr_failed",
+              message: error.localizedDescription,
+              details: nil
+            ))
+          }
+        }
+      }
+    }
   }
 
   override func application(
