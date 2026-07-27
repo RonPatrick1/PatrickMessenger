@@ -35,7 +35,10 @@ class _MessageSearchScreenState extends State<MessageSearchScreen> {
   void initState() {
     super.initState();
     widget.searchIndex.addListener(_indexChanged);
-    if (widget.searchIndex.indexedDocuments == 0) {
+    final needsLocalIndex = widget.roomId == null
+        ? widget.searchIndex.hasRoomsUsingLocalSearch
+        : !widget.searchIndex.usesSharedSearch(widget.roomId);
+    if (widget.searchIndex.indexedDocuments == 0 && needsLocalIndex) {
       unawaited(widget.searchIndex.rebuild());
     }
   }

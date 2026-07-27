@@ -50,8 +50,12 @@ class SearchIndexService extends ChangeNotifier {
   Database? _database;
   List<int>? _hmacKey;
   StreamSubscription<Event>? _timelineSubscription;
+  StreamSubscription<SyncUpdate>? _syncSubscription;
   bool _rebuilding = false;
+  bool _reconcilingSharedRooms = false;
+  bool _reconcileSharedRoomsAgain = false;
   int _indexedDocuments = 0;
+  final Set<String> _knownSharedRoomIds = {};
   final Map<String, String> _resolvedTextCache = {};
 
   SearchIndexService({
@@ -87,6 +91,41 @@ class SearchIndexService extends ChangeNotifier {
     _timelineSubscription = client.onTimelineEvent.stream.listen((event) {
       unawaited(indexEvent(event));
     });
+    _syncSubscription = client.onSync.stream.listen((_) {
+      unawaited(_reconcileSharedRooms());
+    });
+    unawaited(_reconcileSharedRooms());
+  }
+
+  Future<void> _reconcileSharedRooms() async {
+    if (_database == null) return;
+    if (_reconcilingSharedRooms) {
+      _reconcileSharedRoomsAgain = true;
+      return;
+    }
+    _reconcilingSharedRooms = true;
+    try {
+      do {
+        _reconcileSharedRoomsAgain = false;
+        final current = client.rooms
+            .where(
+              (room) =>
+                  room.membership == Membership.join &&
+                  sharedSearch.isJoined(room),
+            )
+            .map((room) => room.id)
+            .toSet();
+        final newlyShared = current.difference(_knownSharedRoomIds);
+        _knownSharedRoomIds
+          ..clear()
+          ..addAll(current);
+        for (final roomId in newlyShared) {
+          await removeLocalRoom(roomId);
+        }
+      } while (_reconcileSharedRoomsAgain);
+    } finally {
+      _reconcilingSharedRooms = false;
+    }
   }
 
   Future<void> _createSchema(Database db, int version) async {
@@ -206,6 +245,7 @@ class SearchIndexService extends ChangeNotifier {
     if (sharedSearch.isJoined(archive.room)) return;
     await archive.load();
     for (final message in archive.messages) {
+      if (sharedSearch.isJoined(archive.room)) return;
       if (message.deleted) {
         await removeDocument(_archiveDocumentId(message.id));
         continue;
@@ -227,10 +267,12 @@ class SearchIndexService extends ChangeNotifier {
   }
 
   Future<void> indexTimeline(Timeline timeline) async {
+    if (sharedSearch.isJoined(timeline.room)) return;
     // timeline.events is the SDK's live list; awaiting inside the loop lets
     // incoming sync events mutate it mid-iteration, which throws Concurrent
     // modification. Iterate a snapshot instead.
     for (final event in timeline.events.toList()) {
+      if (sharedSearch.isJoined(timeline.room)) return;
       await indexEvent(event);
     }
   }
@@ -258,7 +300,7 @@ class SearchIndexService extends ChangeNotifier {
       )) {
         final timeline = await room.getTimeline();
         try {
-          while (timeline.canRequestHistory) {
+          while (timeline.canRequestHistory && !sharedSearch.isJoined(room)) {
             await indexTimeline(timeline);
             await timeline.requestHistory(historyCount: 250);
           }
@@ -341,23 +383,23 @@ class SearchIndexService extends ChangeNotifier {
     });
   }
 
-  Future<void> removeLocalRoom(String roomId) async {
+  Future<void> removeLocalRoom(String roomId, {bool compact = true}) async {
     final database = _database;
     if (database == null) return;
     _resolvedTextCache.clear();
-    await database.transaction((txn) async {
+    final removedDocuments = await database.transaction<int>((txn) async {
       await txn.rawDelete(
         'DELETE FROM search_tokens WHERE document_id IN '
         '(SELECT document_id FROM search_documents WHERE room_id = ?)',
         [roomId],
       );
-      await txn.delete(
+      return txn.delete(
         'search_documents',
         where: 'room_id = ?',
         whereArgs: [roomId],
       );
     });
-    await database.execute('VACUUM');
+    if (compact && removedDocuments > 0) await database.execute('VACUUM');
     _indexedDocuments =
         _firstIntValue(
           await database.rawQuery('SELECT COUNT(*) FROM search_documents'),
@@ -529,6 +571,13 @@ class SearchIndexService extends ChangeNotifier {
     return room != null && sharedSearch.isJoined(room);
   }
 
+  bool get hasRoomsUsingLocalSearch => client.rooms.any(
+    (room) =>
+        room.membership == Membership.join &&
+        room.encrypted &&
+        !sharedSearch.isJoined(room),
+  );
+
   Future<String?> _resolveText(
     SearchSourceKind kind,
     String roomId,
@@ -648,6 +697,7 @@ class SearchIndexService extends ChangeNotifier {
   @override
   void dispose() {
     _timelineSubscription?.cancel();
+    _syncSubscription?.cancel();
     _database?.close();
     super.dispose();
   }
