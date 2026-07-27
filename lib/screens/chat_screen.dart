@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -30,6 +31,7 @@ import '../settings/text_scale_preference.dart';
 import 'chat/chat_composer.dart';
 import 'chat/archive_message_bubble.dart';
 import 'chat/emoji_picker_dialog.dart';
+import 'chat/emoji_style.dart';
 import 'chat/giphy_picker_dialog.dart';
 import 'chat/message_action_dialog.dart';
 import 'chat/message_bubble.dart';
@@ -67,7 +69,9 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  final _messageController = TextEditingController();
+  final TextEditingController _messageController = EmojiTextEditingController(
+    emojiTextStyle: emojiGlyphStyle(),
+  );
   final _messageFocusNode = FocusNode();
   final _itemScrollController = ItemScrollController();
   final _itemPositions = ItemPositionsListener.create();

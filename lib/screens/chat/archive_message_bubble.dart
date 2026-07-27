@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../archive/archive_models.dart';
 import '../../archive/archive_repository.dart';
+import 'emoji_style.dart';
 import 'message_status_indicator.dart';
 
 class ArchiveMessageBubble extends StatelessWidget {
@@ -101,8 +102,9 @@ class ArchiveMessageBubble extends StatelessWidget {
                               ),
                             ),
                           if (message.body.isNotEmpty)
-                            SelectableText(
+                            ColorEmojiText(
                               message.body,
+                              selectable: true,
                               style: TextStyle(color: textColor),
                             ),
                         ],
@@ -189,7 +191,7 @@ class _ArchiveReplyPreview extends StatelessWidget {
         color: color.withValues(alpha: 0.08),
         border: Border(left: BorderSide(color: color, width: 3)),
       ),
-      child: Text(
+      child: ColorEmojiText(
         '${value.authorName}: ${value.body}',
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
@@ -221,7 +223,10 @@ class _ArchiveAttachmentView extends StatelessWidget {
           const Icon(Icons.insert_drive_file_outlined),
           const SizedBox(width: 8),
           Flexible(
-            child: Text(attachment.name, style: TextStyle(color: color)),
+            child: ColorEmojiText(
+              attachment.name,
+              style: TextStyle(color: color),
+            ),
           ),
         ],
       );
@@ -270,7 +275,7 @@ class _ArchiveAttachmentView extends StatelessWidget {
               ),
               if ((attachment.caption ?? '').isNotEmpty) ...[
                 const SizedBox(height: 6),
-                Text(
+                ColorEmojiText(
                   attachment.caption!,
                   maxLines: 4,
                   overflow: TextOverflow.ellipsis,
@@ -316,7 +321,7 @@ class _ArchiveReactionBar extends StatelessWidget {
           (item) => item.authorMatrixId == ownUserId,
         );
         return ActionChip(
-          label: Text('${entry.key} ${entry.value.length}'),
+          label: ReactionLabel(emoji: entry.key, count: entry.value.length),
           side: BorderSide(
             color: mine
                 ? Theme.of(context).colorScheme.primary

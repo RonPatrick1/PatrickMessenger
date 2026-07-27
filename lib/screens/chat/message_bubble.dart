@@ -5,6 +5,7 @@ import '../../archive/archive_contract.dart';
 import '../../archive/archive_repository.dart';
 import '../../matrix/display_names.dart';
 import '../../receipts/message_receipt_service.dart';
+import 'emoji_style.dart';
 import 'liam_icon.dart';
 import 'message_interactions.dart';
 import 'message_status_indicator.dart';
@@ -258,7 +259,7 @@ class _ReplyPreviewState extends State<_ReplyPreview> {
           border: Border(left: BorderSide(color: widget.textColor, width: 3)),
           borderRadius: BorderRadius.circular(8),
         ),
-        child: Text(
+        child: ColorEmojiText(
           '${message.authorName}: ${message.body}',
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
@@ -289,7 +290,7 @@ class _ReplyPreviewState extends State<_ReplyPreview> {
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              Text(
+              ColorEmojiText(
                 visibleMessageBody(reply),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -338,7 +339,7 @@ class _ReactionBar extends StatelessWidget {
               backgroundColor: group.reactedByMe
                   ? colors.primaryContainer
                   : colors.surfaceContainer,
-              label: Text('${group.emoji} ${group.count}'),
+              label: ReactionLabel(emoji: group.emoji, count: group.count),
               onPressed: () => onReaction(group.emoji),
             ),
         ],
@@ -373,15 +374,19 @@ class _MessageContent extends StatelessWidget {
           const Icon(Icons.insert_drive_file_outlined),
           const SizedBox(width: 8),
           Flexible(
-            child: Text(event.body, style: TextStyle(color: textColor)),
+            child: ColorEmojiText(
+              event.body,
+              style: TextStyle(color: textColor),
+            ),
           ),
         ],
       ),
       _ =>
         isLiamAnswer(event, liamUserId: liamUserId)
             ? _LiamAnswerContent(event: event, textColor: textColor)
-            : SelectableText(
+            : ColorEmojiText(
                 visibleMessageBody(event),
+                selectable: true,
                 style: TextStyle(
                   color: textColor,
                   fontSize: event.onlyEmotes && event.numberEmotes <= 5
@@ -419,8 +424,9 @@ class _LiamAnswerContent extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 8),
-        SelectableText(
+        ColorEmojiText(
           visibleLiamAnswer(event),
+          selectable: true,
           style: TextStyle(color: textColor),
         ),
       ],

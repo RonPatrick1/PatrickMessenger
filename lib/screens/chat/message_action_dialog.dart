@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart';
 
 import 'emoji_picker_dialog.dart';
+import 'emoji_style.dart';
 
 enum MessageAction {
   reactMore,
@@ -143,7 +144,7 @@ class _MessageActionContent extends StatelessWidget {
                         onPressed: () =>
                             Navigator.pop(context, SelectedReaction(emoji)),
                         tooltip: 'React $emoji',
-                        icon: Text(emoji, style: const TextStyle(fontSize: 21)),
+                        icon: EmojiGlyph(emoji, size: 21),
                       ),
                     IconButton(
                       constraints: const BoxConstraints.tightFor(

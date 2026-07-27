@@ -1,6 +1,8 @@
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 
+import 'emoji_style.dart';
+
 const quickReactionEmojis = <String>['👍', '❤️', '😂', '😮', '😢', '😡'];
 
 Future<String?> pickReactionEmoji(BuildContext context) {
@@ -32,9 +34,10 @@ Future<String?> pickReactionEmoji(BuildContext context) {
                 onEmojiSelected: (_, emoji) {
                   Navigator.pop(dialogContext, emoji.emoji);
                 },
-                config: const Config(
+                config: Config(
                   height: 470,
-                  emojiViewConfig: EmojiViewConfig(columns: 9),
+                  emojiTextStyle: emojiGlyphStyle(),
+                  emojiViewConfig: const EmojiViewConfig(columns: 9),
                 ),
               ),
             ),
@@ -74,9 +77,10 @@ Future<void> showComposerEmojiPicker(
             Flexible(
               child: EmojiPicker(
                 textEditingController: controller,
-                config: const Config(
+                config: Config(
                   height: 470,
-                  emojiViewConfig: EmojiViewConfig(columns: 9),
+                  emojiTextStyle: emojiGlyphStyle(),
+                  emojiViewConfig: const EmojiViewConfig(columns: 9),
                 ),
               ),
             ),

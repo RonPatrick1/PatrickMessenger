@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'emoji_style.dart';
 import 'liam_icon.dart';
 
 enum AttachmentKind {
@@ -125,7 +126,7 @@ class ChatComposer extends StatelessWidget {
                                   fontWeight: FontWeight.w700,
                                 ),
                           ),
-                          Text(
+                          ColorEmojiText(
                             contextPreview ?? '',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,

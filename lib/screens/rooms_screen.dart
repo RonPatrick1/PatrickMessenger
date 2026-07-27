@@ -14,6 +14,7 @@ import '../search/search_index_service.dart';
 import '../settings/text_scale_preference.dart';
 import '../settings/theme_preference.dart';
 import 'chat_screen.dart';
+import 'chat/emoji_style.dart';
 import 'history_recovery_dialog.dart';
 import 'profile_dialog.dart';
 import 'search_screen.dart';
@@ -346,7 +347,7 @@ class _RoomTile extends StatelessWidget {
             ),
           ],
         ),
-        subtitle: Text(
+        subtitle: ColorEmojiText(
           lastMessage,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
