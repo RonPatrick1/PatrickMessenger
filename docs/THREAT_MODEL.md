@@ -47,6 +47,15 @@ material in the model prompt, but prompt injection cannot be eliminated by an
 instruction alone. Liam must not be given tools, secrets, or authority to
 change external systems without a separate reviewed permission boundary.
 
+Inviting Search likewise adds a trusted Matrix endpoint to that room. Its
+dedicated search database retains keyed token hashes and identifiers instead
+of plaintext bodies or pictures, but the Search Matrix client is still able to
+decrypt the historical backfill and all new messages delivered while joined.
+Any participant can remove it, which deletes the room's shared index and stops
+future delivery. Removal cannot prove erasure from backups or undo access that
+an endpoint already had. A room that does not accept this boundary must keep
+Search absent and use the private per-device index.
+
 Production clients must add:
 
 - biometric or passcode application locking;

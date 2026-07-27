@@ -129,7 +129,9 @@ class _MessageSearchScreenState extends State<MessageSearchScreen> {
                   },
                 ),
                 const Spacer(),
-                if (widget.searchIndex.rebuilding)
+                if (widget.searchIndex.usesSharedSearch(widget.roomId))
+                  const Text('Shared encrypted search')
+                else if (widget.searchIndex.rebuilding)
                   const Text('Indexing…')
                 else
                   Text('${widget.searchIndex.indexedDocuments} indexed'),

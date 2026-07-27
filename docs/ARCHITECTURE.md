@@ -41,6 +41,19 @@ larger groups; there is no account allowlist. Any room participant can ask it
 to leave through the explicit public room command. Liam refuses unencrypted
 rooms.
 
+Shared Search follows the same explicit-participant boundary but uses its own
+dedicated Matrix account and service. When a member enables it, that client
+loads the history and imported archive records it can decrypt, then sends
+searchable text in encrypted custom events. Search builds a separate index of
+keyed token hashes, source IDs, timestamps, and media flags. New messages are
+indexed as its Matrix device receives them. Queries and ID-only results also
+travel as encrypted custom events; the requesting device decrypts the matched
+message and verifies the text before displaying it. Search never sends chat
+messages and its control traffic is excluded from notifications and receipts.
+Any member can request a rebuild or removal. Removal deletes that room's index
+and makes Search leave, but cannot revoke room keys or plaintext it previously
+received as an authorized participant.
+
 Each phone, tablet, and desktop is a distinct Matrix device with its own
 cryptographic identity. Adding a device must eventually require verification
 from an existing device. Removing a device must stop future key sharing and
@@ -70,6 +83,8 @@ The client currently:
 - stores notification enablement, default-sound, and preview settings locally
   per device, with plaintext previews disabled by default;
 - keeps downloaded media in a seven-day application cache;
+- uses a private on-device search index unless a room explicitly adds the
+  shared Search participant;
 - disables public read receipts by default.
 
 GIPHY search and preview traffic is not end-to-end encrypted from GIPHY.

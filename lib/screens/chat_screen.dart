@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:file_selector/file_selector.dart';
@@ -7,17 +8,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:matrix/matrix.dart';
+import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
+import 'package:share_plus/share_plus.dart' as sharing;
 
 import '../archive/archive_contract.dart';
 import '../archive/archive_models.dart';
 import '../archive/archive_repository.dart';
+import '../export/conversation_export_service.dart';
 import '../history/timeline_key_recovery.dart';
 import '../matrix/display_names.dart';
 import '../notifications/liam_chatter_visibility.dart';
 import '../receipts/message_receipt_service.dart';
 import '../search/media_ocr_service.dart';
 import '../search/search_index_service.dart';
+import '../search/shared_search_service.dart';
 import '../services/chat_clipboard.dart';
 import '../services/giphy_client.dart';
 import '../settings/text_scale_preference.dart';
@@ -75,6 +81,11 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _sendingAttachment = false;
   bool _invitingLiam = false;
   bool _loadingHistory = false;
+  bool _loadingSearchResult = false;
+  bool _changingSharedSearch = false;
+  SharedSearchProgress? _sharedSearchProgress;
+  bool _exportingConversation = false;
+  ConversationExportProgress? _exportProgress;
   double? _pinchStartTextScale;
   List<User> _typingUsers = [];
   StreamSubscription<SyncUpdate>? _typingSubscription;
@@ -87,6 +98,8 @@ class _ChatScreenState extends State<ChatScreen> {
   bool get _liamJoined => widget.room
       .getParticipants(const [Membership.join])
       .any((user) => user.id == widget.liamUserId);
+  bool get _sharedSearchJoined =>
+      widget.searchIndex.sharedSearch.isJoined(widget.room);
 
   @override
   void initState() {
@@ -122,6 +135,10 @@ class _ChatScreenState extends State<ChatScreen> {
           unawaited(widget.searchIndex.indexTimeline(timeline));
           _markLatestMessageRead();
           unawaited(_recoverVisibleHistoryKeys(timeline));
+          final initialResult = widget.initialSearchResult;
+          if (initialResult != null) {
+            unawaited(_scrollToSearchResult(initialResult));
+          }
         });
   }
 
@@ -281,28 +298,55 @@ class _ChatScreenState extends State<ChatScreen> {
           client: widget.room.client,
           searchIndex: widget.searchIndex,
           roomId: widget.room.id,
-          openResult: (result) {
+          openResult: (result) async {
             Navigator.of(context).pop();
-            final timeline = _timeline;
-            if (timeline == null) return;
-            final items = _chatItems(timeline);
-            final index = items.indexWhere(
-              (item) => item.id == result.sourceId,
-            );
-            if (index < 0) return;
-            setState(() => _highlightMessageId = result.sourceId);
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!_itemScrollController.isAttached) return;
-              _itemScrollController.scrollTo(
-                index: index,
-                duration: const Duration(milliseconds: 350),
-                curve: Curves.easeOut,
-              );
-            });
+            await _scrollToSearchResult(result);
           },
         ),
       ),
     );
+  }
+
+  Future<void> _scrollToSearchResult(MessageSearchResult result) async {
+    final timeline = _timeline;
+    if (timeline == null || _loadingSearchResult) return;
+    _loadingSearchResult = true;
+    try {
+      var items = _chatItems(timeline);
+      if (result.sourceKind == SearchSourceKind.matrix &&
+          !items.any((item) => item.id == result.sourceId)) {
+        if (mounted) setState(() => _loadingHistory = true);
+        while (timeline.canRequestHistory &&
+            !timeline.events.any((event) => event.eventId == result.sourceId)) {
+          await timeline.requestHistory(historyCount: 250);
+        }
+        await _recoverVisibleHistoryKeys(timeline);
+        items = _chatItems(timeline);
+      }
+      final index = items.indexWhere((item) => item.id == result.sourceId);
+      if (index < 0 || !mounted) {
+        if (mounted) _showError('That search result could not be loaded.');
+        return;
+      }
+      _didJumpToInitialResult = true;
+      setState(() => _highlightMessageId = result.sourceId);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_itemScrollController.isAttached) return;
+        _itemScrollController.scrollTo(
+          index: index,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOut,
+        );
+        Future<void>.delayed(const Duration(seconds: 3), () {
+          if (mounted) setState(() => _highlightMessageId = null);
+        });
+      });
+    } catch (_) {
+      if (mounted) _showError('That search result could not be loaded.');
+    } finally {
+      _loadingSearchResult = false;
+      if (mounted && _loadingHistory) setState(() => _loadingHistory = false);
+    }
   }
 
   int _hiddenLiamChatterCount(Timeline timeline) {
@@ -410,7 +454,12 @@ class _ChatScreenState extends State<ChatScreen> {
   List<String> _receiptRecipients() => widget.room
       .getParticipants(const [Membership.join])
       .map((user) => user.id)
-      .where((id) => id != widget.room.client.userID && id != widget.liamUserId)
+      .where(
+        (id) =>
+            id != widget.room.client.userID &&
+            id != widget.liamUserId &&
+            id != widget.searchIndex.sharedSearch.searchUserId,
+      )
       .toList(growable: false);
 
   String _relationRootEventId() => widget.room.lastEvent?.eventId ?? '';
@@ -478,6 +527,12 @@ class _ChatScreenState extends State<ChatScreen> {
         _prepareLiamQuestion();
       case AttachmentKind.removeLiam:
         await _removeLiam();
+      case AttachmentKind.addSharedSearch:
+        await _addSharedSearch();
+      case AttachmentKind.rebuildSharedSearch:
+        await _rebuildSharedSearch();
+      case AttachmentKind.removeSharedSearch:
+        await _removeSharedSearch();
       case AttachmentKind.picture:
         await _sendPicture();
       case AttachmentKind.pastePicture:
@@ -516,6 +571,125 @@ class _ChatScreenState extends State<ChatScreen> {
       });
     } catch (_) {
       if (mounted) _showError('Liam could not be removed right now.');
+    }
+  }
+
+  Future<void> _addSharedSearch() async {
+    if (_changingSharedSearch) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Add shared search?'),
+        content: const Text(
+          'Search will join this encrypted conversation as a service account. '
+          'It will receive an encrypted copy of the existing searchable '
+          'history and can decrypt new messages while it remains a member. '
+          'Its stored index contains keyed token hashes and message IDs, not '
+          'message text or pictures. Any room member can remove it later, but '
+          'removal cannot undo access it already had while it was a member.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Add and index'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    if (widget.room.name.isEmpty) {
+      try {
+        await widget.room.setName(readableMatrixRoomName(widget.room));
+      } catch (_) {
+        // Shared search still works when the current account cannot preserve
+        // the calculated room title as an explicit title.
+      }
+    }
+    await _runSharedSearchBackfill();
+  }
+
+  Future<void> _rebuildSharedSearch() async {
+    if (_changingSharedSearch || !_sharedSearchJoined) return;
+    await _runSharedSearchBackfill();
+  }
+
+  Future<void> _runSharedSearchBackfill() async {
+    setState(() {
+      _changingSharedSearch = true;
+      _sharedSearchProgress = const SharedSearchProgress(
+        phase: SharedSearchPhase.inviting,
+        completed: 0,
+        total: 0,
+        message: 'Adding Search to this encrypted conversation…',
+      );
+    });
+    try {
+      final count = await widget.searchIndex.sharedSearch.addAndBackfill(
+        room: widget.room,
+        archive: widget.archive,
+        onProgress: (progress) {
+          if (mounted) setState(() => _sharedSearchProgress = progress);
+        },
+      );
+      await widget.searchIndex.removeLocalRoom(widget.room.id);
+      if (mounted) {
+        setState(() {});
+        _showStatus('Shared search is ready with $count indexed messages.');
+      }
+    } catch (_) {
+      if (mounted) {
+        _showError(
+          'Shared search could not be completed. Check that the Search '
+          'service is running, then try again.',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _changingSharedSearch = false;
+          _sharedSearchProgress = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _removeSharedSearch() async {
+    if (_changingSharedSearch || !_sharedSearchJoined) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove shared search?'),
+        content: const Text(
+          'Search will delete this conversation’s shared index and leave the '
+          'room. Searches will return to this device’s private local index.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _changingSharedSearch = true);
+    try {
+      await widget.searchIndex.sharedSearch.remove(widget.room);
+      if (mounted) {
+        _showStatus('Search is deleting this chat’s shared index and leaving.');
+      }
+    } catch (_) {
+      if (mounted) _showError('Shared search could not be removed right now.');
+    } finally {
+      if (mounted) setState(() => _changingSharedSearch = false);
     }
   }
 
@@ -673,8 +847,8 @@ class _ChatScreenState extends State<ChatScreen> {
         shrinkImageMaxDimension: preserveAnimation ? null : 1600,
         extraContent: {
           messageRecipientsKey: _receiptRecipients(),
-          if (_archiveReplyTo != null) archiveReplyKey: _archiveReplyTo!.id,
-          if (ocr != null) mediaOcrKey: ocr,
+          archiveReplyKey: ?_archiveReplyTo?.id,
+          mediaOcrKey: ?ocr,
         },
       );
       if (mounted) _cancelComposerContext();
@@ -1258,6 +1432,128 @@ class _ChatScreenState extends State<ChatScreen> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _exportConversation() async {
+    if (_exportingConversation) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Export decrypted conversation?'),
+        content: const Text(
+          'The ZIP will contain the complete message history this device can '
+          'decrypt, plus every available picture and attachment. The exported '
+          'copy is not end-to-end encrypted. Anyone who gets the ZIP can read '
+          'it, so keep it somewhere private and protected.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Export'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final fileName = ConversationExportService.suggestedFileName(widget.room);
+    final desktop = Platform.isLinux || Platform.isMacOS || Platform.isWindows;
+    String? destinationPath;
+    if (desktop) {
+      final location = await getSaveLocation(
+        suggestedName: fileName,
+        acceptedTypeGroups: const [
+          XTypeGroup(
+            label: 'ZIP archives',
+            extensions: ['zip'],
+            mimeTypes: ['application/zip'],
+            uniformTypeIdentifiers: ['public.zip-archive'],
+          ),
+        ],
+      );
+      destinationPath = location?.path;
+      if (destinationPath == null || !mounted) return;
+      if (path.extension(destinationPath).toLowerCase() != '.zip') {
+        destinationPath = '$destinationPath.zip';
+      }
+    } else {
+      final temporaryDirectory = await getTemporaryDirectory();
+      destinationPath = path.join(
+        temporaryDirectory.path,
+        'patrick_messenger_exports',
+        fileName,
+      );
+    }
+
+    setState(() {
+      _exportingConversation = true;
+      _exportProgress = const ConversationExportProgress(
+        phase: ConversationExportPhase.loadingHistory,
+        completed: 0,
+        total: 0,
+        message: 'Loading the complete encrypted conversation…',
+      );
+    });
+
+    try {
+      final result = await ConversationExportService().export(
+        room: widget.room,
+        importedArchive: widget.archive,
+        destinationPath: destinationPath,
+        onProgress: (progress) {
+          if (!mounted) return;
+          setState(() => _exportProgress = progress);
+        },
+      );
+      if (!mounted) return;
+
+      if (!desktop) {
+        final renderBox = context.findRenderObject() as RenderBox?;
+        await sharing.SharePlus.instance.share(
+          sharing.ShareParams(
+            title: 'Patrick Messenger conversation export',
+            text: 'Decrypted conversation export from Patrick Messenger.',
+            files: [XFile(result.path, mimeType: 'application/zip')],
+            fileNameOverrides: [fileName],
+            sharePositionOrigin: renderBox == null
+                ? null
+                : renderBox.localToGlobal(Offset.zero) & renderBox.size,
+          ),
+        );
+      }
+      if (!mounted) return;
+      final warnings = [
+        if (result.missingMediaCount > 0)
+          '${result.missingMediaCount} unavailable attachment(s)',
+        if (result.undecryptableCount > 0)
+          '${result.undecryptableCount} message(s) this device could not decrypt',
+      ];
+      _showStatus(
+        desktop
+            ? 'Exported ${result.messageCount} messages to ${result.path}'
+            : warnings.isEmpty
+            ? 'Exported ${result.messageCount} messages.'
+            : 'Exported ${result.messageCount} messages; ${warnings.join(', ')}.',
+      );
+    } catch (_) {
+      if (mounted) {
+        _showError(
+          'The conversation could not be exported. Check the connection and '
+          'available storage, then try again.',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _exportingConversation = false;
+          _exportProgress = null;
+        });
+      }
+    }
+  }
+
   Future<void> _renameConversation() async {
     final currentName = widget.room.name.isNotEmpty
         ? widget.room.name
@@ -1365,6 +1661,18 @@ class _ChatScreenState extends State<ChatScreen> {
                   icon: const Icon(Icons.search),
                 ),
                 IconButton(
+                  onPressed: _exportingConversation
+                      ? null
+                      : _exportConversation,
+                  tooltip: 'Export conversation',
+                  icon: _exportingConversation
+                      ? const SizedBox.square(
+                          dimension: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.download_outlined),
+                ),
+                IconButton(
                   onPressed: _toggleLiamChatterHidden,
                   tooltip: widget.liamChatterVisibility.isHidden(widget.room.id)
                       ? 'Show Liam chatter in this conversation'
@@ -1386,6 +1694,42 @@ class _ChatScreenState extends State<ChatScreen> {
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
+                if (_sharedSearchProgress case final progress?)
+                  Material(
+                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            progress.message,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 6),
+                          LinearProgressIndicator(value: progress.fraction),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_exportProgress case final progress?)
+                  Material(
+                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            progress.message,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 6),
+                          LinearProgressIndicator(value: progress.fraction),
+                        ],
+                      ),
+                    ),
+                  ),
                 Expanded(
                   child: GestureDetector(
                     behavior: HitTestBehavior.translucent,
@@ -1509,8 +1853,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   ChatComposer(
                     controller: _messageController,
                     focusNode: _messageFocusNode,
-                    sendingAttachment: _sendingAttachment,
+                    sendingAttachment:
+                        _sendingAttachment || _changingSharedSearch,
                     liamJoined: _liamJoined,
+                    sharedSearchJoined: _sharedSearchJoined,
                     contextLabel:
                         _editingEvent != null || _editingArchiveMessage != null
                         ? 'Editing message'

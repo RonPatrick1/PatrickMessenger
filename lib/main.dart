@@ -15,6 +15,7 @@ import 'notifications/push_classification_service.dart';
 import 'receipts/message_receipt_service.dart';
 import 'receipts/read_receipt_preferences.dart';
 import 'search/search_index_service.dart';
+import 'search/shared_search_service.dart';
 import 'settings/text_scale_preference.dart';
 import 'settings/theme_preference.dart';
 
@@ -52,7 +53,16 @@ Future<void> _startup() async {
   final pushClassificationService = PushClassificationService(client);
   await pushClassificationService.initialize();
   final archives = ArchiveRepository(client);
-  final searchIndex = SearchIndexService(client: client, archives: archives);
+  final sharedSearch = SharedSearchService(
+    client: client,
+    searchUserId: config.searchUserId,
+  );
+  await sharedSearch.initialize();
+  final searchIndex = SearchIndexService(
+    client: client,
+    archives: archives,
+    sharedSearch: sharedSearch,
+  );
   await searchIndex.initialize();
   final receiptService = MessageReceiptService(client, readReceiptController);
   await receiptService.initialize();

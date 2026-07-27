@@ -70,6 +70,39 @@ services:
       RUST_LOG: patrick_messenger_liam=info,matrix_sdk_crypto::backups=error,warn
     volumes:
       - ./liam-data:/data
+      # Read-only access to LiamAgent's locally generated images, at the
+      # same absolute host path — fetch_image_bytes() in main.rs reads
+      # this path literally as given by the generate_image tool, with no
+      # translation, so the container-side path must match exactly.
+      - /var/www/LiamAgent/.liam_generated:/var/www/LiamAgent/.liam_generated:ro
+    depends_on:
+      synapse:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  search:
+    build:
+      context: ..
+      dockerfile: search_bot/Dockerfile
+    container_name: patrick-messenger-search
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - path: .env
+        required: false
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      SEARCH_HOMESERVER_URL: http://127.0.0.1:8008
+      SEARCH_DATA_PATH: /data
+      RUST_LOG: patrick_messenger_search=info,matrix_sdk_crypto::backups=error,warn
+    volumes:
+      - ./search-data:/data
     depends_on:
       synapse:
         condition: service_healthy

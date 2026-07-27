@@ -19,6 +19,7 @@ Start it from the repository root:
 ./server/bootstrap.sh
 ./server/create-user.sh
 ./server/setup-liam.sh
+./server/setup-search.sh
 ```
 
 Run `create-user.sh` for each initial development account. Do not reuse
@@ -29,6 +30,14 @@ important passwords in this development instance.
 and starts it beside Synapse. It is safe to run again: existing private
 credentials and the persistent encrypted bot store are retained. The bot is
 available to every authenticated account; there is no user allowlist.
+
+`setup-search.sh` likewise creates the non-admin
+`@search:matrix.patrick-lamphier.com` account and its persistent encrypted
+Matrix device. Search joins only rooms where a member explicitly adds it. Its
+durable index stores keyed token hashes, Matrix/archive message identifiers,
+timestamps, and media flags—not message text or media. Historical searchable
+text travels to it only inside encrypted room events. Any room member can tell
+Search to delete that room's index and leave.
 
 The generated `server/data` directory contains signing keys, the registration
 secret, message metadata, encrypted message events, and uploaded encrypted

@@ -21,7 +21,9 @@ The first milestone currently provides:
 - private local Ollama questions through the optional Liam assistant;
 - encrypted message-history recovery for adding new devices;
 - encrypted Signal-history import with original dates and media;
-- private local search across messages, filenames, captions, and picture OCR;
+- optional shared encrypted search across messages, filenames, captions, and
+  picture OCR, with private on-device search as the fallback;
+- per-conversation decrypted ZIP exports with readable history and media;
 - sent, delivered, and read indicators with per-member group counts;
 - persistent System, Light, and Dark appearance choices;
 - per-device message notification, sound, and lock-screen-preview choices;
@@ -41,6 +43,7 @@ Docker 29+ with the Compose plugin is required.
 ./server/create-user.sh
 ./server/create-user.sh
 ./server/setup-liam.sh
+./server/setup-search.sh
 ```
 
 Create one development account for each person. The server name is fixed at
@@ -182,9 +185,39 @@ filter searches filenames, captions, and locally recognized text in pictures.
 Opening a result returns to the message in context. Account settings includes
 a **Rebuild search index** button for a full rescan of encrypted history.
 
-The search database stores keyed token hashes and message identifiers, not
-plaintext message bodies or OCR text. Each candidate result is decrypted and
-verified before it is shown. Search and OCR therefore remain on the device.
+By default, each device keeps its own private search index. In a chat's plus
+menu, **Add shared Search** adds the dedicated Search Matrix participant and
+securely backfills the complete history that the current device can decrypt.
+After that, every authorized device can search without separately rebuilding
+the entire index. **Rebuild shared Search** refreshes the historical index and
+**Remove shared Search** deletes that room's shared index and asks Search to
+leave. These controls work in one-to-one and group conversations and are
+available to every room member.
+
+Search requests and backfill records are custom end-to-end encrypted Matrix
+events. The separate search index stores keyed token hashes, message IDs,
+timestamps, and media flags—not plaintext bodies or pictures. Candidate
+results contain IDs only and are decrypted and verified by the requesting
+device before display. Search is nevertheless an authorized room participant
+while enabled: it receives room keys and can decrypt messages just like any
+other participant. Removing it prevents future access but cannot undo access
+it already had. Chats without Search continue using the private on-device
+index.
+
+### Export a conversation
+
+Open a conversation and use the download button in its header. Patrick
+Messenger loads the room's full server history, merges in imported Signal
+history at its original timestamps, and creates a ZIP containing a readable
+transcript, one structured JSON record per message, a manifest, and every
+attachment the current device can download and decrypt. Ubuntu, macOS, and
+Windows ask where to save it; iPhone/iPad and Android open the system share
+sheet so it can be saved or sent to another app.
+
+The ZIP is deliberately a portable, decrypted copy. It is no longer protected
+by Matrix end-to-end encryption, so the app warns before export and reports
+media or messages that the current device could not decrypt. Store exported
+ZIPs somewhere private and protected.
 
 Computer-style account names such as `ron_patrick` are displayed as
 `Ron Patrick` until a display name is chosen. Use the pencil button in a

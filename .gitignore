@@ -63,9 +63,11 @@ app.*.map.json
 /server/data/
 /server/.env
 /server/liam-data/
+/server/search-data/
 /server/sygnal.yaml
 /server/push-secrets/
 /liam_bot/target/
+/search_bot/target/
 *.jks
 *.keystore
 *.p8

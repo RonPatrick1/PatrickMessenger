@@ -4,6 +4,9 @@ class AppConfig {
   static const _productionHomeserver = 'https://patrick-lamphier.com';
   static const _productionServerName = 'matrix.patrick-lamphier.com';
   static const _productionLiamUserId = '@liam:matrix.patrick-lamphier.com';
+  static const _productionSearchUserId = '@search:matrix.patrick-lamphier.com';
+  static const _productionGiphyApiKey =
+      'AZ4NP1gCNzC2rktp957hMNWbzR3A6Iko';
   static const _productionPushGateway =
       'https://patrick-lamphier.com/_matrix/push/v1/notify';
   static const _iosPushAppId = 'com.patricklamphier.patrickMessenger';
@@ -13,6 +16,7 @@ class AppConfig {
   final bool allowInsecureDevelopment;
   final String giphyApiKey;
   final String liamUserId;
+  final String searchUserId;
   final String pushGatewayUrl;
   final String iosPushAppId;
 
@@ -20,8 +24,9 @@ class AppConfig {
     required this.homeserver,
     required this.serverName,
     this.allowInsecureDevelopment = false,
-    this.giphyApiKey = '',
+    this.giphyApiKey = _productionGiphyApiKey,
     this.liamUserId = _productionLiamUserId,
+    this.searchUserId = _productionSearchUserId,
     this.pushGatewayUrl = _productionPushGateway,
     this.iosPushAppId = _iosPushAppId,
   });
@@ -53,10 +58,17 @@ class AppConfig {
       allowInsecureDevelopment: usePublicMobileServer
           ? false
           : configuredAllowInsecure,
-      giphyApiKey: const String.fromEnvironment('GIPHY_API_KEY'),
+      giphyApiKey: const String.fromEnvironment(
+        'GIPHY_API_KEY',
+        defaultValue: _productionGiphyApiKey,
+      ),
       liamUserId: const String.fromEnvironment(
         'LIAM_MATRIX_USER_ID',
         defaultValue: _productionLiamUserId,
+      ),
+      searchUserId: const String.fromEnvironment(
+        'SEARCH_MATRIX_USER_ID',
+        defaultValue: _productionSearchUserId,
       ),
       pushGatewayUrl: const String.fromEnvironment(
         'MATRIX_PUSH_GATEWAY_URL',
@@ -94,6 +106,11 @@ class AppConfig {
     if (!RegExp(r'^@[^:\s]+:[^\s]+$').hasMatch(liamUserId)) {
       throw const FormatException(
         'LIAM_MATRIX_USER_ID must be a complete Matrix user ID.',
+      );
+    }
+    if (!RegExp(r'^@[^:\s]+:[^\s]+$').hasMatch(searchUserId)) {
+      throw const FormatException(
+        'SEARCH_MATRIX_USER_ID must be a complete Matrix user ID.',
       );
     }
     final pushGateway = Uri.tryParse(pushGatewayUrl);

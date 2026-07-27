@@ -3,7 +3,16 @@ import 'package:flutter/services.dart';
 
 import 'liam_icon.dart';
 
-enum AttachmentKind { askLiam, removeLiam, picture, pastePicture, gifSearch }
+enum AttachmentKind {
+  askLiam,
+  removeLiam,
+  addSharedSearch,
+  rebuildSharedSearch,
+  removeSharedSearch,
+  picture,
+  pastePicture,
+  gifSearch,
+}
 
 enum ComposerEnterAction { ignore, send, insertNewline }
 
@@ -46,6 +55,7 @@ class ChatComposer extends StatelessWidget {
   final FocusNode? focusNode;
   final bool sendingAttachment;
   final bool liamJoined;
+  final bool sharedSearchJoined;
   final String? contextLabel;
   final String? contextPreview;
   final VoidCallback onCancelContext;
@@ -60,6 +70,7 @@ class ChatComposer extends StatelessWidget {
     this.focusNode,
     required this.sendingAttachment,
     this.liamJoined = false,
+    this.sharedSearchJoined = false,
     required this.contextLabel,
     required this.contextPreview,
     required this.onCancelContext,
@@ -166,6 +177,33 @@ class ChatComposer extends StatelessWidget {
                               contentPadding: EdgeInsets.zero,
                             ),
                           ),
+                        if (!sharedSearchJoined)
+                          const PopupMenuItem(
+                            value: AttachmentKind.addSharedSearch,
+                            child: ListTile(
+                              leading: Icon(Icons.manage_search_outlined),
+                              title: Text('Add shared search'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                        if (sharedSearchJoined) ...[
+                          const PopupMenuItem(
+                            value: AttachmentKind.rebuildSharedSearch,
+                            child: ListTile(
+                              leading: Icon(Icons.sync_outlined),
+                              title: Text('Rebuild shared search'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                          const PopupMenuItem(
+                            value: AttachmentKind.removeSharedSearch,
+                            child: ListTile(
+                              leading: Icon(Icons.person_remove_outlined),
+                              title: Text('Remove shared search'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                        ],
                         const PopupMenuItem(
                           value: AttachmentKind.picture,
                           child: ListTile(

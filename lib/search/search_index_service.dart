@@ -17,6 +17,7 @@ import '../archive/archive_repository.dart';
 import '../matrix/display_names.dart';
 import '../matrix/linux_sqlite_loader.dart';
 import 'media_ocr_service.dart';
+import 'shared_search_service.dart';
 
 enum SearchSourceKind { matrix, archive }
 
@@ -43,6 +44,7 @@ class MessageSearchResult {
 class SearchIndexService extends ChangeNotifier {
   final Client client;
   final ArchiveRepository archives;
+  final SharedSearchService sharedSearch;
   final String? testingKey;
 
   Database? _database;
@@ -55,6 +57,7 @@ class SearchIndexService extends ChangeNotifier {
   SearchIndexService({
     required this.client,
     required this.archives,
+    required this.sharedSearch,
     this.testingKey,
   });
 
@@ -122,8 +125,9 @@ class SearchIndexService extends ChangeNotifier {
       return sha256.convert(utf8.encode('patrick-search:$token')).bytes;
     }
     final keyFile = File(path.join(supportDirectory.path, '.search-index-key'));
-    if (await keyFile.exists())
+    if (await keyFile.exists()) {
       return base64Url.decode(await keyFile.readAsString());
+    }
     final random = Random.secure();
     final key = List<int>.generate(32, (_) => random.nextInt(256));
     await keyFile.writeAsString(base64UrlEncode(key), flush: true);
@@ -133,6 +137,10 @@ class SearchIndexService extends ChangeNotifier {
 
   Future<void> indexEvent(Event event) async {
     if (_database == null || event.roomId == null) return;
+    if (sharedSearchControlEventTypes.contains(event.type) ||
+        sharedSearch.isJoined(event.room)) {
+      return;
+    }
     if (event.type == EventTypes.Redaction) {
       final redacts = event.redacts;
       if (redacts != null) await removeDocument(_matrixDocumentId(redacts));
@@ -195,6 +203,7 @@ class SearchIndexService extends ChangeNotifier {
   }
 
   Future<void> indexArchiveRoom(ArchiveRoomData archive) async {
+    if (sharedSearch.isJoined(archive.room)) return;
     await archive.load();
     for (final message in archive.messages) {
       if (message.deleted) {
@@ -235,10 +244,14 @@ class SearchIndexService extends ChangeNotifier {
       });
       await archives.loadAllRooms();
       for (final archive in archives.loadedRooms) {
+        if (sharedSearch.isJoined(archive.room)) continue;
         await indexArchiveRoom(archive);
       }
       for (final room in client.rooms.where(
-        (room) => room.membership == Membership.join && room.encrypted,
+        (room) =>
+            room.membership == Membership.join &&
+            room.encrypted &&
+            !sharedSearch.isJoined(room),
       )) {
         final timeline = await room.getTimeline();
         try {
@@ -325,14 +338,49 @@ class SearchIndexService extends ChangeNotifier {
     });
   }
 
+  Future<void> removeLocalRoom(String roomId) async {
+    final database = _database;
+    if (database == null) return;
+    _resolvedTextCache.clear();
+    await database.transaction((txn) async {
+      await txn.rawDelete(
+        'DELETE FROM search_tokens WHERE document_id IN '
+        '(SELECT document_id FROM search_documents WHERE room_id = ?)',
+        [roomId],
+      );
+      await txn.delete(
+        'search_documents',
+        where: 'room_id = ?',
+        whereArgs: [roomId],
+      );
+    });
+    await database.execute('VACUUM');
+    _indexedDocuments =
+        _firstIntValue(
+          await database.rawQuery('SELECT COUNT(*) FROM search_documents'),
+        ) ??
+        0;
+    notifyListeners();
+  }
+
   Future<List<MessageSearchResult>> search(
     String query, {
     String? roomId,
     bool mediaOnly = false,
     int limit = 100,
   }) async {
+    final sharedResults = await _searchShared(
+      query,
+      roomId: roomId,
+      mediaOnly: mediaOnly,
+      limit: limit,
+    );
+    if (roomId != null) {
+      final room = client.getRoomById(roomId);
+      if (room != null && sharedSearch.isJoined(room)) return sharedResults;
+    }
     final database = _database;
-    if (database == null) return const [];
+    if (database == null) return sharedResults;
     final words = _queryWords(query);
     if (words.isEmpty) return const [];
     final hashes = words
@@ -357,7 +405,7 @@ class SearchIndexService extends ChangeNotifier {
       ORDER BY d.timestamp DESC
       LIMIT ?
     ''',
-      [...hashes, if (roomId != null) roomId, hashes.length, limit * 3],
+      [...hashes, ?roomId, hashes.length, limit * 3],
     );
     final normalizedQuery = _normalize(query);
     final results = <MessageSearchResult>[];
@@ -384,7 +432,98 @@ class SearchIndexService extends ChangeNotifier {
       );
       if (results.length == limit) break;
     }
+    if (sharedResults.isEmpty) return results;
+    final combined = <String, MessageSearchResult>{};
+    for (final result in [...sharedResults, ...results]) {
+      combined['${result.roomId}:${result.sourceKind.name}:${result.sourceId}'] =
+          result;
+    }
+    final merged = combined.values.toList()
+      ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    return merged.take(limit).toList(growable: false);
+  }
+
+  Future<List<MessageSearchResult>> _searchShared(
+    String query, {
+    required String? roomId,
+    required bool mediaOnly,
+    required int limit,
+  }) async {
+    final rooms = <Room>[];
+    if (roomId == null) {
+      rooms.addAll(
+        client.rooms.where(
+          (room) =>
+              room.membership == Membership.join && sharedSearch.isJoined(room),
+        ),
+      );
+    } else {
+      final room = client.getRoomById(roomId);
+      if (room != null && sharedSearch.isJoined(room)) rooms.add(room);
+    }
+    if (rooms.isEmpty) return const [];
+    final hits =
+        (await Future.wait(
+            rooms.map(
+              (room) => sharedSearch.searchRoom(
+                room,
+                query,
+                mediaOnly: mediaOnly,
+                limit: limit,
+              ),
+            ),
+          )).expand((values) => values).toList()
+          ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    final words = _queryWords(query);
+    final normalizedQuery = _normalize(query);
+    final results = <MessageSearchResult>[];
+    for (final hit in hits) {
+      final result = await _resolveSharedHit(hit, normalizedQuery, words);
+      if (result != null) results.add(result);
+      if (results.length >= limit) break;
+    }
     return results;
+  }
+
+  Future<MessageSearchResult?> _resolveSharedHit(
+    SharedSearchHit hit,
+    String normalizedQuery,
+    List<String> words,
+  ) async {
+    final kind = hit.sourceKind == SearchSourceKind.archive.name
+        ? SearchSourceKind.archive
+        : SearchSourceKind.matrix;
+    final text = await _resolveText(kind, hit.roomId, hit.sourceId);
+    if (text == null || !_matches(text, normalizedQuery, words)) return null;
+    final room = client.getRoomById(hit.roomId);
+    if (room == null) return null;
+    String senderName;
+    if (kind == SearchSourceKind.archive) {
+      final archive = archives.forRoom(room);
+      await archive.load();
+      final message = archive.message(hit.sourceId);
+      if (message == null) return null;
+      senderName = message.authorName;
+    } else {
+      final event = await room.getEventById(hit.sourceId);
+      if (event == null || event.redacted) return null;
+      senderName = readableMatrixUserName(event.senderFromMemoryOrFallback);
+    }
+    return MessageSearchResult(
+      roomId: hit.roomId,
+      sourceId: hit.sourceId,
+      sourceKind: kind,
+      senderName: senderName,
+      timestamp: hit.timestamp,
+      text: _snippet(text, words),
+      media: hit.media,
+    );
+  }
+
+  bool usesSharedSearch(String? roomId) {
+    if (roomId == null) return sharedSearch.hasAnySharedRooms();
+    final room = client.getRoomById(roomId);
+    return room != null && sharedSearch.isJoined(room);
   }
 
   Future<String?> _resolveText(
