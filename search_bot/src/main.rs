@@ -1,7 +1,9 @@
 use std::{
     collections::HashSet,
     env, fs,
+    io::Write as _,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::{Arc, Mutex},
 };
 
@@ -10,7 +12,11 @@ use matrix_sdk::{
     Client, Room, RoomState,
     config::SyncSettings,
     event_handler::{Ctx, RawEvent},
-    ruma::events::{AnySyncTimelineEvent, room::member::StrippedRoomMemberEvent},
+    media::{MediaFormat, MediaRequestParameters},
+    ruma::events::{
+        AnySyncTimelineEvent,
+        room::{EncryptedFile, MediaSource, member::StrippedRoomMemberEvent},
+    },
 };
 use rand::RngCore as _;
 use rusqlite::{Connection, OptionalExtension as _, params, params_from_iter, types::Value as SqlValue};
@@ -65,9 +71,9 @@ fn required_env(name: &str) -> Result<String> {
     Ok(value)
 }
 
-#[derive(Clone)]
 struct Bot {
     index: Arc<SearchIndex>,
+    event_lock: tokio::sync::Mutex<()>,
 }
 
 struct SearchIndex {
@@ -84,6 +90,20 @@ struct SearchDocument {
     is_media: bool,
     #[serde(default)]
     text: String,
+    #[serde(default)]
+    ocr_media: Vec<OcrMediaRef>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct OcrMediaRef {
+    url: String,
+    key: String,
+    iv: String,
+    sha256: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    mime_type: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -213,8 +233,14 @@ impl SearchIndex {
         let hashes = query_words
             .iter()
             .map(|word| {
-                let prefix: String = word.chars().take(24).collect();
-                self.hash_token(room_id, &format!("p:{prefix}")).to_vec()
+                let chars = word.chars().collect::<Vec<_>>();
+                let query_token = if chars.len() <= 3 {
+                    format!("s:{word}")
+                } else {
+                    let prefix: String = chars.into_iter().take(24).collect();
+                    format!("p:{prefix}")
+                };
+                self.hash_token(room_id, &query_token).to_vec()
             })
             .collect::<Vec<_>>();
         let placeholders = std::iter::repeat_n("?", hashes.len()).collect::<Vec<_>>().join(",");
@@ -302,7 +328,10 @@ async fn main() -> Result<()> {
         .context("logging Search into Matrix")?;
     client.account().set_display_name(Some("Search")).await?;
 
-    client.add_event_handler_context(Arc::new(Bot { index }));
+    client.add_event_handler_context(Arc::new(Bot {
+        index,
+        event_lock: tokio::sync::Mutex::new(()),
+    }));
     client.add_event_handler(on_invite);
     let response = client.sync_once(SyncSettings::default()).await?;
     client.add_event_handler(on_timeline_event);
@@ -367,14 +396,17 @@ async fn on_timeline_event(
     let event_type = value.get("type").and_then(Value::as_str).unwrap_or_default();
     let content = value.get("content").cloned().unwrap_or_else(|| json!({}));
     let room_id = room.room_id().as_str();
+    let _event_guard = bot.event_lock.lock().await;
 
     let result = match event_type {
         RESET_EVENT => bot.index.reset_room(room_id),
-        BATCH_EVENT => process_batch(&bot.index, room_id, &content),
+        BATCH_EVENT => process_batch(&bot.index, &client, room_id, &content).await,
         COMMIT_EVENT => process_commit(&bot.index, &room, room_id, &content).await,
         QUERY_EVENT => process_query(&bot.index, &room, room_id, &content).await,
         LEAVE_EVENT => process_leave(&bot.index, &room, room_id).await,
-        "m.room.message" | "m.sticker" => index_live_message(&bot.index, room_id, &value),
+        "m.room.message" | "m.sticker" => {
+            index_live_message(&bot.index, &client, room_id, &value).await
+        }
         "m.room.redaction" => process_redaction(&bot.index, room_id, &value),
         ARCHIVE_OVERLAY_EVENT => process_archive_overlay(&bot.index, room_id, &content),
         _ => Ok(()),
@@ -384,10 +416,18 @@ async fn on_timeline_event(
     }
 }
 
-fn process_batch(index: &SearchIndex, room_id: &str, content: &Value) -> Result<()> {
-    let documents: Vec<SearchDocument> = serde_json::from_value(
+async fn process_batch(
+    index: &SearchIndex,
+    client: &Client,
+    room_id: &str,
+    content: &Value,
+) -> Result<()> {
+    let mut documents: Vec<SearchDocument> = serde_json::from_value(
         content.get("documents").cloned().unwrap_or_else(|| json!([])),
     )?;
+    for document in &mut documents {
+        append_server_ocr(client, document).await;
+    }
     index.upsert_documents(room_id, &documents)
 }
 
@@ -424,7 +464,12 @@ async fn process_leave(index: &SearchIndex, room: &Room, room_id: &str) -> Resul
     Ok(())
 }
 
-fn index_live_message(index: &SearchIndex, room_id: &str, event: &Value) -> Result<()> {
+async fn index_live_message(
+    index: &SearchIndex,
+    client: &Client,
+    room_id: &str,
+    event: &Value,
+) -> Result<()> {
     let content = event.get("content").cloned().unwrap_or_else(|| json!({}));
     let relation = content.get("m.relates_to");
     let replacement = relation
@@ -460,7 +505,7 @@ fn index_live_message(index: &SearchIndex, room_id: &str, event: &Value) -> Resu
         return Ok(());
     }
     let msgtype = searchable_content.get("msgtype").and_then(Value::as_str).unwrap_or("m.text");
-    let document = SearchDocument {
+    let mut document = SearchDocument {
         source_id: source_id.to_owned(),
         source_kind: "matrix".to_owned(),
         timestamp: event
@@ -469,8 +514,100 @@ fn index_live_message(index: &SearchIndex, room_id: &str, event: &Value) -> Resu
             .unwrap_or_default(),
         is_media: msgtype != "m.text",
         text,
+        ocr_media: if searchable_content
+            .get(MEDIA_OCR_KEY)
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty())
+        {
+            Vec::new()
+        } else {
+            ocr_media_from_matrix_content(searchable_content).into_iter().collect()
+        },
     };
+    append_server_ocr(client, &mut document).await;
     index.upsert_documents(room_id, &[document])
+}
+
+fn ocr_media_from_matrix_content(content: &Value) -> Option<OcrMediaRef> {
+    let file = content.get("file")?;
+    let key = file.get("key")?.get("k")?.as_str()?;
+    let sha256 = file.get("hashes")?.get("sha256")?.as_str()?;
+    Some(OcrMediaRef {
+        url: file.get("url")?.as_str()?.to_owned(),
+        key: key.to_owned(),
+        iv: file.get("iv")?.as_str()?.to_owned(),
+        sha256: sha256.to_owned(),
+        name: content.get("body").and_then(Value::as_str).unwrap_or_default().to_owned(),
+        mime_type: content
+            .get("info")
+            .and_then(|value| value.get("mimetype"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+    })
+}
+
+async fn append_server_ocr(client: &Client, document: &mut SearchDocument) {
+    for media in &document.ocr_media {
+        if !media.mime_type.is_empty() && !media.mime_type.starts_with("image/") {
+            continue;
+        }
+        match recognize_media(client, media).await {
+            Ok(Some(text)) => {
+                if !document.text.is_empty() {
+                    document.text.push('\n');
+                }
+                document.text.push_str(&text);
+            }
+            Ok(None) => {}
+            Err(error) => warn!(file = %media.name, %error, "Server picture OCR failed"),
+        }
+    }
+}
+
+async fn recognize_media(client: &Client, media: &OcrMediaRef) -> Result<Option<String>> {
+    let encrypted_file: EncryptedFile = serde_json::from_value(json!({
+        "url": media.url,
+        "key": {
+            "kty": "oct",
+            "key_ops": ["encrypt", "decrypt"],
+            "alg": "A256CTR",
+            "k": media.key,
+            "ext": true
+        },
+        "iv": media.iv,
+        "hashes": {"sha256": media.sha256},
+        "v": "v2"
+    }))?;
+    let request = MediaRequestParameters {
+        source: MediaSource::Encrypted(Box::new(encrypted_file)),
+        format: MediaFormat::File,
+    };
+    let bytes = client.media().get_media_content(&request, false).await?;
+    tokio::task::spawn_blocking(move || recognize_with_tesseract(&bytes))
+        .await
+        .context("joining the OCR worker")?
+}
+
+fn recognize_with_tesseract(bytes: &[u8]) -> Result<Option<String>> {
+    let mut child = Command::new("tesseract")
+        .args(["stdin", "stdout", "--psm", "11", "-l", "eng"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("starting Tesseract")?;
+    child
+        .stdin
+        .take()
+        .context("opening Tesseract input")?
+        .write_all(bytes)?;
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    Ok((!text.is_empty()).then_some(text))
 }
 
 fn process_redaction(index: &SearchIndex, room_id: &str, event: &Value) -> Result<()> {
@@ -511,6 +648,7 @@ fn process_archive_overlay(index: &SearchIndex, room_id: &str, content: &Value) 
                     timestamp,
                     is_media: false,
                     text: text.to_owned(),
+                    ocr_media: Vec::new(),
                 }],
             )
         }
@@ -537,6 +675,14 @@ fn index_tokens(input: &str) -> HashSet<String> {
         tokens.insert(format!("w:{word}"));
         for length in 2..=end {
             tokens.insert(format!("p:{}", chars[..length].iter().collect::<String>()));
+        }
+        for length in 2..=chars.len().min(3) {
+            for start in 0..=chars.len() - length {
+                tokens.insert(format!(
+                    "s:{}",
+                    chars[start..start + length].iter().collect::<String>()
+                ));
+            }
         }
     }
     tokens
@@ -565,6 +711,7 @@ mod tests {
         assert!(tokens.contains("p:he"));
         assert!(tokens.contains("p:hello"));
         assert!(tokens.contains("w:world"));
+        assert!(tokens.contains("s:ell"));
     }
 
     #[test]

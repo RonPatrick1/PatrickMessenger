@@ -22,7 +22,6 @@ import '../history/timeline_key_recovery.dart';
 import '../matrix/display_names.dart';
 import '../notifications/liam_chatter_visibility.dart';
 import '../receipts/message_receipt_service.dart';
-import '../search/media_ocr_service.dart';
 import '../search/search_index_service.dart';
 import '../search/shared_search_service.dart';
 import '../services/chat_clipboard.dart';
@@ -844,7 +843,6 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       final preserveAnimation =
           isAnimatedGifName(name) || image.mimeType == 'image/gif';
-      final ocr = await MediaOcrService().recognizeImage(bytes, name);
       await widget.room.sendFileEvent(
         image,
         inReplyTo: _replyTo,
@@ -852,7 +850,6 @@ class _ChatScreenState extends State<ChatScreen> {
         extraContent: {
           messageRecipientsKey: _receiptRecipients(),
           archiveReplyKey: ?_archiveReplyTo?.id,
-          mediaOcrKey: ?ocr,
         },
       );
       if (mounted) _cancelComposerContext();

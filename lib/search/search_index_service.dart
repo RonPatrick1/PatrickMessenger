@@ -12,11 +12,9 @@ import 'package:sqflite/sqflite.dart' as mobile;
 import 'package:sqflite_common/sqlite_api.dart';
 
 import '../archive/archive_contract.dart';
-import '../archive/archive_models.dart';
 import '../archive/archive_repository.dart';
 import '../matrix/display_names.dart';
 import '../matrix/linux_sqlite_loader.dart';
-import 'media_ocr_service.dart';
 import 'shared_search_service.dart';
 
 enum SearchSourceKind { matrix, archive }
@@ -208,20 +206,7 @@ class SearchIndexService extends ChangeNotifier {
       }
       return;
     }
-    var ocrText = event.content[mediaOcrKey]?.toString() ?? '';
-    if (ocrText.isEmpty &&
-        (event.messageType == MessageTypes.Image ||
-            event.messageType == MessageTypes.Sticker)) {
-      try {
-        final image = await event.downloadAndDecryptAttachment();
-        ocrText =
-            await MediaOcrService().recognizeImage(image.bytes, image.name) ??
-            '';
-      } catch (_) {
-        // Search still indexes the caption and filename when media or OCR is
-        // unavailable on this device.
-      }
-    }
+    final ocrText = event.content[mediaOcrKey]?.toString() ?? '';
     final text = [
       event.body,
       event.content['filename']?.toString() ?? '',
@@ -250,7 +235,7 @@ class SearchIndexService extends ChangeNotifier {
         await removeDocument(_archiveDocumentId(message.id));
         continue;
       }
-      final text = await _archiveSearchableText(archive, message);
+      final text = message.searchableText;
       _resolvedTextCache[_archiveDocumentId(message.id)] = text;
       await _putDocument(
         documentId: _archiveDocumentId(message.id),
@@ -428,11 +413,7 @@ class SearchIndexService extends ChangeNotifier {
     if (database == null) return sharedResults;
     final words = _queryWords(query);
     if (words.isEmpty) return const [];
-    final hashes = words
-        .map(
-          (word) => _hashToken('p:${word.substring(0, min(word.length, 24))}'),
-        )
-        .toList();
+    final hashes = words.map((word) => _hashToken(_queryToken(word))).toList();
     final placeholders = List.filled(hashes.length, '?').join(',');
     final where = <String>[
       't.token IN ($placeholders)',
@@ -539,7 +520,6 @@ class SearchIndexService extends ChangeNotifier {
         ? SearchSourceKind.archive
         : SearchSourceKind.matrix;
     final text = await _resolveText(kind, hit.roomId, hit.sourceId);
-    if (text == null || !_matches(text, normalizedQuery, words)) return null;
     final room = client.getRoomById(hit.roomId);
     if (room == null) return null;
     String senderName;
@@ -560,7 +540,11 @@ class SearchIndexService extends ChangeNotifier {
       sourceKind: kind,
       senderName: senderName,
       timestamp: hit.timestamp,
-      text: _snippet(text, words),
+      text: text != null && _matches(text, normalizedQuery, words)
+          ? _snippet(text, words)
+          : hit.media
+          ? 'Picture matching “$normalizedQuery”'
+          : text ?? 'Matching encrypted message',
       media: hit.media,
     );
   }
@@ -595,52 +579,20 @@ class SearchIndexService extends ChangeNotifier {
       await archive.load();
       final message = archive.message(sourceId);
       if (message == null) return null;
-      final text = await _archiveSearchableText(archive, message);
+      final text = message.searchableText;
       _resolvedTextCache[documentId] = text;
       return text;
     }
     final room = client.getRoomById(roomId);
     final event = await room?.getEventById(sourceId);
     if (event == null || event.redacted) return null;
-    var ocrText = event.content[mediaOcrKey]?.toString() ?? '';
-    if (ocrText.isEmpty &&
-        (event.messageType == MessageTypes.Image ||
-            event.messageType == MessageTypes.Sticker)) {
-      try {
-        final image = await event.downloadAndDecryptAttachment();
-        ocrText =
-            await MediaOcrService().recognizeImage(image.bytes, image.name) ??
-            '';
-      } catch (_) {}
-    }
+    final ocrText = event.content[mediaOcrKey]?.toString() ?? '';
     final text = [
       event.body,
       event.content['filename']?.toString() ?? '',
       ocrText,
     ].where((part) => part.trim().isNotEmpty).join('\n');
     _resolvedTextCache[documentId] = text;
-    return text;
-  }
-
-  Future<String> _archiveSearchableText(
-    ArchiveRoomData archive,
-    ArchiveMessage message,
-  ) async {
-    var text = message.searchableText;
-    for (final attachment in message.attachments.where(
-      (item) => item.isImage && !item.missing && (item.ocrText ?? '').isEmpty,
-    )) {
-      try {
-        final bytes = await archive.loadAttachment(attachment);
-        final recognized = await MediaOcrService().recognizeImage(
-          bytes,
-          attachment.name,
-        );
-        if (recognized != null) text = '$text\n$recognized';
-      } catch (_) {
-        // Captions and filenames remain searchable if media is unavailable.
-      }
-    }
     return text;
   }
 
@@ -651,8 +603,17 @@ class SearchIndexService extends ChangeNotifier {
       for (var length = min(2, end); length <= end; length++) {
         yield 'p:${word.substring(0, length)}';
       }
+      for (var length = 2; length <= min(3, word.length); length++) {
+        for (var start = 0; start + length <= word.length; start++) {
+          yield 's:${word.substring(start, start + length)}';
+        }
+      }
     }
   }
+
+  String _queryToken(String word) => word.length <= 3
+      ? 's:$word'
+      : 'p:${word.substring(0, min(word.length, 24))}';
 
   List<String> _queryWords(String input) => _normalize(input)
       .split(RegExp(r'\s+'))
@@ -674,7 +635,13 @@ class SearchIndexService extends ChangeNotifier {
     final normalized = _normalize(text);
     if (normalized.contains(normalizedQuery)) return true;
     return words.every(
-      (word) => normalized.split(' ').any((token) => token.startsWith(word)),
+      (word) => normalized
+          .split(' ')
+          .any(
+            (token) =>
+                token.startsWith(word) ||
+                (word.length <= 3 && token.contains(word)),
+          ),
     );
   }
 

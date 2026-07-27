@@ -22,7 +22,7 @@ The first milestone currently provides:
 - encrypted message-history recovery for adding new devices;
 - encrypted Signal-history import with original dates and media;
 - optional shared encrypted search across messages, filenames, captions, and
-  picture OCR, with private on-device search as the fallback;
+  server-side picture OCR, with private text search as the fallback;
 - per-conversation decrypted ZIP exports with readable history and media;
 - sent, delivered, and read indicators with per-member group counts;
 - persistent System, Light, and Dark appearance choices;
@@ -181,7 +181,8 @@ No Signal export text is sent to an OCR cloud service.
 
 Use the search button on the Messages screen to search every conversation, or
 the search button inside a chat to restrict results to that chat. The Media
-filter searches filenames, captions, and locally recognized text in pictures.
+filter searches filenames, captions, and text recognized in pictures by the
+authorized Search service.
 Opening a result returns to the message in context. Account settings includes
 a **Rebuild search index** button for a full rescan of encrypted history.
 
@@ -195,14 +196,18 @@ leave. These controls work in one-to-one and group conversations and are
 available to every room member.
 
 Search requests and backfill records are custom end-to-end encrypted Matrix
-events. The separate search index stores keyed token hashes, message IDs,
-timestamps, and media flags—not plaintext bodies or pictures. Candidate
-results contain IDs only and are decrypted and verified by the requesting
-device before display. Search is nevertheless an authorized room participant
-while enabled: it receives room keys and can decrypt messages just like any
-other participant. Removing it prevents future access but cannot undo access
-it already had. Chats without Search continue using the private on-device
-index.
+events. For picture OCR, the client passes the already-uploaded encrypted media
+reference and its key to Search inside that encrypted event. Search downloads,
+decrypts, and recognizes the picture on the server; phones do not run OCR or
+re-upload the picture. The separate search index stores keyed token hashes,
+message IDs, timestamps, and media flags—not plaintext bodies or pictures.
+Candidate results contain IDs only and the requesting device decrypts the
+matching message for display. Search is nevertheless an authorized room
+participant while enabled: it receives room keys and can decrypt messages just
+like any other participant. Removing it prevents future access but cannot undo
+access it already had. Chats without Search continue using a private local text
+index for message text, captions, and filenames, but picture OCR requires the
+shared Search service.
 
 ### Export a conversation
 

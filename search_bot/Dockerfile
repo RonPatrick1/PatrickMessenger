@@ -8,7 +8,8 @@ RUN cargo build --release --locked
 FROM debian:bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libsqlite3-0 \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates libsqlite3-0 tesseract-ocr tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --uid 10002 search

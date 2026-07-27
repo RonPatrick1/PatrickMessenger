@@ -201,7 +201,7 @@ class SharedSearchService extends ChangeNotifier {
         timeline.cancelSubscriptions();
       }
 
-      final count = await ready.future.timeout(const Duration(minutes: 2));
+      final count = await ready.future.timeout(const Duration(minutes: 30));
       notifyListeners();
       return count;
     } finally {
@@ -297,6 +297,10 @@ class SharedSearchService extends ChangeNotifier {
     }
     final display = event.getDisplayEvent(timeline);
     if (display.redacted) return null;
+    final ocrText = event.content[mediaOcrKey]?.toString() ?? '';
+    final ocrMedia = ocrText.isEmpty
+        ? _matrixOcrMedia(display)
+        : const <Map<String, Object?>>[];
     final text = _limitText(
       [
         display.calcUnlocalizedBody(
@@ -305,7 +309,7 @@ class SharedSearchService extends ChangeNotifier {
           plaintextBody: true,
         ),
         display.content['filename']?.toString() ?? '',
-        event.content[mediaOcrKey]?.toString() ?? '',
+        ocrText,
       ].where((part) => part.trim().isNotEmpty).join('\n'),
     );
     if (text.isEmpty) return null;
@@ -315,6 +319,7 @@ class SharedSearchService extends ChangeNotifier {
       'timestamp': event.originServerTs.millisecondsSinceEpoch,
       'is_media': display.messageType != MessageTypes.Text,
       'text': text,
+      if (ocrMedia.isNotEmpty) 'ocr_media': ocrMedia,
     };
   }
 
@@ -322,14 +327,63 @@ class SharedSearchService extends ChangeNotifier {
     if (message.deleted) return null;
     final text = _limitText(message.searchableText);
     if (text.isEmpty) return null;
+    final ocrMedia = message.attachments
+        .where(
+          (item) =>
+              item.isImage && !item.missing && (item.ocrText ?? '').isEmpty,
+        )
+        .map((item) => _archiveOcrMedia(item.file!))
+        .toList(growable: false);
     return {
       'source_id': message.id,
       'source_kind': 'archive',
       'timestamp': message.timestamp.millisecondsSinceEpoch,
       'is_media': message.attachments.isNotEmpty,
       'text': text,
+      if (ocrMedia.isNotEmpty) 'ocr_media': ocrMedia,
     };
   }
+
+  List<Map<String, Object?>> _matrixOcrMedia(Event event) {
+    if (event.messageType != MessageTypes.Image &&
+        event.messageType != MessageTypes.Sticker) {
+      return const [];
+    }
+    final file = event.content['file'];
+    if (file is! Map) return const [];
+    final key = file['key'];
+    final hashes = file['hashes'];
+    if (key is! Map || hashes is! Map) return const [];
+    final url = file['url']?.toString() ?? '';
+    final encodedKey = key['k']?.toString() ?? '';
+    final iv = file['iv']?.toString() ?? '';
+    final sha256 = hashes['sha256']?.toString() ?? '';
+    if (url.isEmpty || encodedKey.isEmpty || iv.isEmpty || sha256.isEmpty) {
+      return const [];
+    }
+    return [
+      {
+        'url': url,
+        'key': encodedKey,
+        'iv': iv,
+        'sha256': sha256,
+        'name': event.body,
+        'mime_type': event.content['info'] is Map
+            ? (event.content['info'] as Map)['mimetype']?.toString() ??
+                  'image/jpeg'
+            : 'image/jpeg',
+      },
+    ];
+  }
+
+  Map<String, Object?> _archiveOcrMedia(ArchiveEncryptedFileRef file) => {
+    'url': file.url,
+    'key': file.key,
+    'iv': file.iv,
+    'sha256': file.sha256,
+    'name': file.name,
+    'mime_type': file.mimeType,
+  };
 
   String _limitText(String text) => text.length <= _maxDocumentCharacters
       ? text

@@ -48,6 +48,15 @@ Future<void> main(List<String> arguments) async {
   }
 
   final source = Directory(options['source'] as String);
+  if (!(options['skip-ocr'] as bool) && !await _tesseractIsAvailable()) {
+    stderr.writeln(
+      'Tesseract OCR is not installed. Install tesseract-ocr before importing '
+      'if text inside pictures should be searchable, or explicitly pass '
+      '--skip-ocr.',
+    );
+    exitCode = 69;
+    return;
+  }
   final signalParser = SignalExportParser(
     source: source,
     accountMatrixId: options['account'] as String,
@@ -87,6 +96,15 @@ Future<void> main(List<String> arguments) async {
     roomId: options['room-id'] as String,
     accountMatrixId: options['account'] as String,
   ).run();
+}
+
+Future<bool> _tesseractIsAvailable() async {
+  try {
+    final result = await Process.run('tesseract', const ['--version']);
+    return result.exitCode == 0;
+  } on ProcessException {
+    return false;
+  }
 }
 
 void _printScan(SignalExportScan scan) {

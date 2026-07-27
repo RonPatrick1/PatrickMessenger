@@ -36,7 +36,10 @@ available to every authenticated account; there is no user allowlist.
 Matrix device. Search joins only rooms where a member explicitly adds it. Its
 durable index stores keyed token hashes, Matrix/archive message identifiers,
 timestamps, and media flags—not message text or media. Historical searchable
-text travels to it only inside encrypted room events. Any room member can tell
+text and encrypted media references travel to it only inside encrypted room
+events. The Search container decrypts authorized pictures, runs Tesseract OCR
+server-side, and immediately reduces recognized text to keyed index tokens; it
+does not retain plaintext OCR or picture copies. Any room member can tell
 Search to delete that room's index and leave.
 
 The generated `server/data` directory contains signing keys, the registration
