@@ -428,8 +428,9 @@ fn guess_image_mime(target: &str) -> mime::Mime {
 }
 
 async fn fetch_image_bytes(http: &HttpClient, target: &str) -> Result<Vec<u8>> {
-    if target.starts_with('/') && std::path::Path::new(target).exists() {
-        return std::fs::read(target).context("reading local generated image");
+    if target.starts_with('/') {
+        return std::fs::read(target)
+            .with_context(|| format!("reading local generated image {target}"));
     }
     let response = http.get(target).send().await?.error_for_status()?;
     Ok(response.bytes().await?.to_vec())
@@ -437,6 +438,7 @@ async fn fetch_image_bytes(http: &HttpClient, target: &str) -> Result<Vec<u8>> {
 
 async fn send_liam_answer(room: &Room, answer: &str, http: &HttpClient) -> Result<()> {
     let (images, stripped) = extract_and_strip_markdown_images(answer);
+    let mut failed_images = 0usize;
     for image in &images {
         match fetch_image_bytes(http, &image.target).await {
             Ok(bytes) => {
@@ -457,17 +459,28 @@ async fn send_liam_answer(room: &Room, answer: &str, http: &HttpClient) -> Resul
                     )
                     .await
                 {
+                    failed_images += 1;
                     warn!(target = %image.target, %error, "failed to send Liam image attachment");
                 }
             }
             Err(error) => {
+                failed_images += 1;
                 warn!(target = %image.target, %error, "failed to fetch Liam image for Matrix upload");
             }
         }
     }
 
-    let remaining = plainify_markdown_text(stripped.trim());
-    let remaining = remaining.trim();
+    let mut remaining = plainify_markdown_text(stripped.trim()).trim().to_owned();
+    if failed_images > 0 {
+        let noun = if failed_images == 1 { "image" } else { "images" };
+        let notice = format!(
+            "I generated the {noun}, but couldn't upload it to this conversation. Please try again."
+        );
+        if !remaining.is_empty() {
+            remaining.push_str("\n\n");
+        }
+        remaining.push_str(&notice);
+    }
     if !remaining.is_empty() || images.is_empty() {
         let body = if remaining.is_empty() {
             plainify_markdown_text(answer)
