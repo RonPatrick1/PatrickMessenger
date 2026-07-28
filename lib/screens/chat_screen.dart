@@ -135,11 +135,7 @@ class _ChatScreenState extends State<ChatScreen> {
           .listen(_handleLiveTimelineEvent);
       unawaited(widget.searchIndex.indexTimeline(timeline));
       _markLatestMessageRead();
-      unawaited(_recoverVisibleHistoryKeys(timeline));
-      final initialResult = widget.initialSearchResult;
-      if (initialResult != null) {
-        unawaited(_scrollToSearchResult(initialResult));
-      }
+      unawaited(_prepareInitialTimeline(timeline));
     });
   }
 
@@ -184,6 +180,39 @@ class _ChatScreenState extends State<ChatScreen> {
       _liveTimelineEvents.remove(_liveTimelineEvents.keys.first);
     }
     _scheduleTimelineRefresh();
+  }
+
+  Future<void> _prepareInitialTimeline(Timeline timeline) async {
+    if (_messages(timeline).length < 20 && timeline.canRequestHistory) {
+      if (mounted) setState(() => _loadingHistory = true);
+      try {
+        // Shared Search uses encrypted custom events in the conversation for
+        // indexing and queries. Those events are intentionally hidden from
+        // the chat, but a burst of them can fill Matrix's initial timeline
+        // page and push every real message outside the loaded window.
+        for (var page = 0; page < 20; page++) {
+          if (!mounted || !identical(_timeline, timeline)) return;
+          if (_messages(timeline).length >= 20 || !timeline.canRequestHistory) {
+            break;
+          }
+          await timeline.requestHistory(historyCount: 100);
+        }
+      } catch (_) {
+        // The normal manual history control remains available if automatic
+        // pagination is interrupted by a temporary network failure.
+      } finally {
+        if (mounted && identical(_timeline, timeline)) {
+          setState(() => _loadingHistory = false);
+        }
+      }
+    }
+
+    await _recoverVisibleHistoryKeys(timeline);
+    if (!mounted || !identical(_timeline, timeline)) return;
+    final initialResult = widget.initialSearchResult;
+    if (initialResult != null) {
+      await _scrollToSearchResult(initialResult);
+    }
   }
 
   void _handlePreferencesChanged() {
