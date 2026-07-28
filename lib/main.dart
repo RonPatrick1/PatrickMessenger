@@ -7,6 +7,7 @@ import 'archive/archive_repository.dart';
 import 'config/app_config.dart';
 import 'matrix/matrix_client_factory.dart';
 import 'notifications/android_message_connection_service.dart';
+import 'notifications/conversation_mute_controller.dart';
 import 'notifications/ios_push_service.dart';
 import 'notifications/liam_chatter_visibility.dart';
 import 'notifications/message_notification_service.dart';
@@ -43,11 +44,13 @@ Future<void> _startup() async {
   final themeController = await ThemePreferenceController.load();
   final textScaleController = await TextScalePreferenceController.load();
   final notificationController = await NotificationPreferenceController.load();
+  final conversationMuteController = await ConversationMuteController.load();
   final liamChatterVisibility = await LiamChatterVisibilityController.load();
   final readReceiptController = await ReadReceiptPreferenceController.load();
   final client = await MatrixClientFactory.create(
     homeserver: config.homeserver,
   );
+  await conversationMuteController.connect(client);
   await liamChatterVisibility.connect(client, config.liamUserId);
   await readReceiptController.connect(client);
   final pushClassificationService = PushClassificationService(client);
@@ -69,6 +72,7 @@ Future<void> _startup() async {
   final notificationService = MessageNotificationService(
     client,
     notificationController,
+    conversationMuteController,
     liamChatterVisibility,
     config.liamUserId,
   );
@@ -89,6 +93,7 @@ Future<void> _startup() async {
       textScaleController: textScaleController,
       notificationController: notificationController,
       notificationService: notificationService,
+      conversationMuteController: conversationMuteController,
       liamChatterVisibility: liamChatterVisibility,
       archives: archives,
       searchIndex: searchIndex,

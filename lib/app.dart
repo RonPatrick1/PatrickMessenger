@@ -3,6 +3,7 @@ import 'package:matrix/matrix.dart';
 
 import 'config/app_config.dart';
 import 'archive/archive_repository.dart';
+import 'notifications/conversation_mute_controller.dart';
 import 'notifications/liam_chatter_visibility.dart';
 import 'notifications/message_notification_service.dart';
 import 'notifications/notification_preferences.dart';
@@ -21,6 +22,7 @@ class PatrickMessengerApp extends StatelessWidget {
   final TextScalePreferenceController textScaleController;
   final NotificationPreferenceController notificationController;
   final MessageNotificationService notificationService;
+  final ConversationMuteController conversationMuteController;
   final LiamChatterVisibilityController liamChatterVisibility;
   final ArchiveRepository archives;
   final SearchIndexService searchIndex;
@@ -34,6 +36,7 @@ class PatrickMessengerApp extends StatelessWidget {
     required this.textScaleController,
     required this.notificationController,
     required this.notificationService,
+    required this.conversationMuteController,
     required this.liamChatterVisibility,
     required this.archives,
     required this.searchIndex,
@@ -79,6 +82,7 @@ class PatrickMessengerApp extends StatelessWidget {
                       textScaleController: textScaleController,
                       notificationController: notificationController,
                       notificationService: notificationService,
+                      conversationMuteController: conversationMuteController,
                       liamChatterVisibility: liamChatterVisibility,
                       archives: archives,
                       searchIndex: searchIndex,

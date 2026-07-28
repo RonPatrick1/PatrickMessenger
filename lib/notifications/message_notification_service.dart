@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import '../archive/archive_contract.dart';
 import '../matrix/display_names.dart';
 import '../screens/chat/message_interactions.dart';
+import 'conversation_mute_controller.dart';
 import 'liam_chatter_visibility.dart';
 import 'notification_preferences.dart';
 
@@ -20,6 +21,7 @@ class MessageNotificationService {
 
   final Client _client;
   final NotificationPreferenceController _preferences;
+  final ConversationMuteController _conversationMuteController;
   final LiamChatterVisibilityController _liamChatterVisibility;
   final String _liamUserId;
   final FlutterLocalNotificationsPlugin _plugin;
@@ -37,6 +39,7 @@ class MessageNotificationService {
   MessageNotificationService(
     this._client,
     this._preferences,
+    this._conversationMuteController,
     this._liamChatterVisibility,
     this._liamUserId, {
     FlutterLocalNotificationsPlugin? plugin,
@@ -235,6 +238,7 @@ class MessageNotificationService {
 
   Future<void> _showEvent(Event event) async {
     if (!_initialized || !_preferences.enabled) return;
+    if (_conversationMuteController.isMuted(event.room.id)) return;
     if (_liamChatterVisibility.isHidden(event.room.id) &&
         isLiamChatterEvent(event, liamUserId: _liamUserId)) {
       return;

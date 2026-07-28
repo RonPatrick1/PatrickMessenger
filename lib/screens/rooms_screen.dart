@@ -6,6 +6,7 @@ import '../archive/archive_repository.dart';
 import '../matrix/display_names.dart';
 import '../matrix/room_rename_permissions.dart';
 import '../matrix/user_directory_resolver.dart';
+import '../notifications/conversation_mute_controller.dart';
 import '../notifications/liam_chatter_visibility.dart';
 import '../notifications/message_notification_service.dart';
 import '../notifications/notification_preferences.dart';
@@ -27,6 +28,7 @@ class RoomsScreen extends StatelessWidget {
   final TextScalePreferenceController textScaleController;
   final NotificationPreferenceController notificationController;
   final MessageNotificationService notificationService;
+  final ConversationMuteController conversationMuteController;
   final LiamChatterVisibilityController liamChatterVisibility;
   final ArchiveRepository archives;
   final SearchIndexService searchIndex;
@@ -40,6 +42,7 @@ class RoomsScreen extends StatelessWidget {
     required this.textScaleController,
     required this.notificationController,
     required this.notificationService,
+    required this.conversationMuteController,
     required this.liamChatterVisibility,
     required this.archives,
     required this.searchIndex,
@@ -126,38 +129,44 @@ class RoomsScreen extends StatelessWidget {
         children: [
           HistoryRecoveryBanner(client: client),
           Expanded(
-            child: StreamBuilder<SyncUpdate>(
-              stream: client.onSync.stream,
-              builder: (context, _) {
-                RoomRenamePermissionUpgrader.schedule(client);
-                final rooms = client.rooms
-                    .where(
-                      (room) =>
-                          room.membership == Membership.join ||
-                          room.membership == Membership.invite,
-                    )
-                    .toList();
+            child: ListenableBuilder(
+              listenable: conversationMuteController,
+              builder: (context, _) => StreamBuilder<SyncUpdate>(
+                stream: client.onSync.stream,
+                builder: (context, _) {
+                  RoomRenamePermissionUpgrader.schedule(client);
+                  final rooms = client.rooms
+                      .where(
+                        (room) =>
+                            room.membership == Membership.join ||
+                            room.membership == Membership.invite,
+                      )
+                      .toList();
 
-                if (rooms.isEmpty) {
-                  return _EmptyRooms(
-                    onStart: () => _startConversation(context),
-                  );
-                }
-
-                return ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 100),
-                  itemCount: rooms.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 4),
-                  itemBuilder: (context, index) {
-                    final room = rooms[index];
-                    return _RoomTile(
-                      room: room,
-                      onTap: () => _openRoom(context, room),
-                      onDelete: () => _deleteConversation(context, room),
+                  if (rooms.isEmpty) {
+                    return _EmptyRooms(
+                      onStart: () => _startConversation(context),
                     );
-                  },
-                );
-              },
+                  }
+
+                  return ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 100),
+                    itemCount: rooms.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 4),
+                    itemBuilder: (context, index) {
+                      final room = rooms[index];
+                      return _RoomTile(
+                        room: room,
+                        muted: conversationMuteController.isMuted(room.id),
+                        onTap: () => _openRoom(context, room),
+                        onToggleMute: () =>
+                            _toggleConversationMute(context, room),
+                        onDelete: () => _deleteConversation(context, room),
+                      );
+                    },
+                  );
+                },
+              ),
             ),
           ),
         ],
@@ -330,6 +339,7 @@ class RoomsScreen extends StatelessWidget {
     try {
       await room.leave();
       await room.forget();
+      conversationMuteController.removeRoom(room.id);
       archives.removeRoom(room.id);
       try {
         await searchIndex.removeLocalRoom(room.id);
@@ -350,6 +360,32 @@ class RoomsScreen extends StatelessWidget {
           context,
           'The conversation could not be deleted. Check your connection and '
           'try again.',
+        );
+      }
+    }
+  }
+
+  Future<void> _toggleConversationMute(BuildContext context, Room room) async {
+    final muted = conversationMuteController.isMuted(room.id);
+    try {
+      await conversationMuteController.setMuted(room, !muted);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            muted
+                ? 'Conversation notifications turned on.'
+                : 'Conversation muted.',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (context.mounted) {
+        _showError(
+          context,
+          muted
+              ? 'The conversation could not be unmuted.'
+              : 'The conversation could not be muted.',
         );
       }
     }
@@ -385,12 +421,16 @@ class RoomsScreen extends StatelessWidget {
 
 class _RoomTile extends StatelessWidget {
   final Room room;
+  final bool muted;
   final VoidCallback onTap;
+  final VoidCallback onToggleMute;
   final VoidCallback onDelete;
 
   const _RoomTile({
     required this.room,
+    required this.muted,
     required this.onTap,
+    required this.onToggleMute,
     required this.onDelete,
   });
 
@@ -417,6 +457,14 @@ class _RoomTile extends StatelessWidget {
               child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
             ),
             const SizedBox(width: 8),
+            if (muted) ...[
+              Icon(
+                Icons.notifications_off_outlined,
+                size: 16,
+                color: colors.onSurfaceVariant,
+              ),
+              const SizedBox(width: 6),
+            ],
             Icon(
               room.encrypted ? Icons.lock_outline : Icons.lock_open_outlined,
               size: 16,
@@ -439,10 +487,29 @@ class _RoomTile extends StatelessWidget {
             PopupMenuButton<_ConversationAction>(
               tooltip: 'Conversation actions',
               onSelected: (action) {
-                if (action == _ConversationAction.delete) onDelete();
+                switch (action) {
+                  case _ConversationAction.toggleMute:
+                    onToggleMute();
+                  case _ConversationAction.delete:
+                    onDelete();
+                }
               },
-              itemBuilder: (context) => const [
+              itemBuilder: (context) => [
                 PopupMenuItem(
+                  value: _ConversationAction.toggleMute,
+                  child: ListTile(
+                    leading: Icon(
+                      muted
+                          ? Icons.notifications_outlined
+                          : Icons.notifications_off_outlined,
+                    ),
+                    title: Text(
+                      muted ? 'Unmute conversation' : 'Mute conversation',
+                    ),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                const PopupMenuItem(
                   value: _ConversationAction.delete,
                   child: ListTile(
                     leading: Icon(Icons.delete_outline),
@@ -552,7 +619,7 @@ class _NewConversationDialogState extends State<_NewConversationDialog> {
 
 enum _AccountAction { settings, signOut }
 
-enum _ConversationAction { delete }
+enum _ConversationAction { toggleMute, delete }
 
 String _initial(String name) {
   final trimmed = name.trim();
