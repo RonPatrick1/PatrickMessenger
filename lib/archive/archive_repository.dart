@@ -19,6 +19,10 @@ class ArchiveRepository {
 
   Iterable<ArchiveRoomData> get loadedRooms => _rooms.values;
 
+  void removeRoom(String roomId) {
+    _rooms.remove(roomId)?.dispose();
+  }
+
   Future<void> loadAllRooms() async {
     for (final room in client.rooms.where(
       (room) => room.membership == Membership.join && room.encrypted,

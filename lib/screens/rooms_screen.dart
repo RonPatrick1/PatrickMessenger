@@ -153,6 +153,7 @@ class RoomsScreen extends StatelessWidget {
                     return _RoomTile(
                       room: room,
                       onTap: () => _openRoom(context, room),
+                      onDelete: () => _deleteConversation(context, room),
                     );
                   },
                 );
@@ -293,6 +294,66 @@ class RoomsScreen extends StatelessWidget {
     }
   }
 
+  Future<void> _deleteConversation(BuildContext context, Room room) async {
+    final name = readableMatrixRoomName(room);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        icon: const Icon(Icons.delete_outline),
+        title: const Text('Delete conversation?'),
+        content: Text(
+          'Remove "$name" from this account? Other participants will keep '
+          'their copies of the conversation.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(dialogContext).colorScheme.error,
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Deleting conversation…')),
+    );
+    try {
+      await room.leave();
+      await room.forget();
+      archives.removeRoom(room.id);
+      try {
+        await searchIndex.removeLocalRoom(room.id);
+      } catch (_) {
+        // The room is already gone. Any stale local search rows are ignored
+        // because their room can no longer be opened.
+      }
+      if (context.mounted) {
+        messenger.hideCurrentSnackBar();
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Conversation deleted.')),
+        );
+      }
+    } catch (_) {
+      if (context.mounted) {
+        messenger.hideCurrentSnackBar();
+        _showError(
+          context,
+          'The conversation could not be deleted. Check your connection and '
+          'try again.',
+        );
+      }
+    }
+  }
+
   void _showSecurityInfo(BuildContext context) {
     showDialog<void>(
       context: context,
@@ -324,8 +385,13 @@ class RoomsScreen extends StatelessWidget {
 class _RoomTile extends StatelessWidget {
   final Room room;
   final VoidCallback onTap;
+  final VoidCallback onDelete;
 
-  const _RoomTile({required this.room, required this.onTap});
+  const _RoomTile({
+    required this.room,
+    required this.onTap,
+    required this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -362,9 +428,31 @@ class _RoomTile extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
-        trailing: room.notificationCount > 0
-            ? Badge(label: Text('${room.notificationCount}'))
-            : const Icon(Icons.chevron_right),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (room.notificationCount > 0) ...[
+              Badge(label: Text('${room.notificationCount}')),
+              const SizedBox(width: 4),
+            ],
+            PopupMenuButton<_ConversationAction>(
+              tooltip: 'Conversation actions',
+              onSelected: (action) {
+                if (action == _ConversationAction.delete) onDelete();
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: _ConversationAction.delete,
+                  child: ListTile(
+                    leading: Icon(Icons.delete_outline),
+                    title: Text('Delete conversation'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
         onTap: onTap,
       ),
     );
@@ -462,6 +550,8 @@ class _NewConversationDialogState extends State<_NewConversationDialog> {
 }
 
 enum _AccountAction { settings, signOut }
+
+enum _ConversationAction { delete }
 
 String _initial(String name) {
   final trimmed = name.trim();
