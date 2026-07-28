@@ -37,6 +37,9 @@ String humanizeMatrixLocalpart(String localpart) {
 }
 
 String readableMatrixRoomName(Room room) {
+  if (room.membership == Membership.invite && room.name.isEmpty) {
+    return 'Invited by ${readableMatrixInviterName(room)}';
+  }
   var name = room.getLocalizedDisplayname();
   final heroIds = <String>{...?room.summary.mHeroes, ?room.directChatMatrixID};
   for (final userId in heroIds) {
@@ -46,4 +49,14 @@ String readableMatrixRoomName(Room room) {
     if (raw != readable) name = name.replaceAll(raw, readable);
   }
   return name;
+}
+
+String readableMatrixInviterName(Room room) {
+  final ownUserId = room.client.userID;
+  if (ownUserId == null) return 'Unknown user';
+  final inviterId = room.getState(EventTypes.RoomMember, ownUserId)?.senderId;
+  if (inviterId == null || inviterId.isEmpty) return 'Unknown user';
+  return readableMatrixUserName(
+    room.unsafeGetUserFromMemoryOrFallback(inviterId),
+  );
 }

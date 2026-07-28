@@ -91,27 +91,27 @@ void main() {
     test('names a single other typer', () {
       expect(
         typingIndicatorLabel(
-          otherTypingNames: const ['Elizabeth Patrick'],
+          otherTypingNames: const ['Alice Smith'],
           liamTyping: false,
         ),
-        'Elizabeth Patrick is typing...',
+        'Alice Smith is typing...',
       );
     });
 
     test('joins two typers with and', () {
       expect(
         typingIndicatorLabel(
-          otherTypingNames: const ['Ron Patrick', 'Elizabeth Patrick'],
+          otherTypingNames: const ['Alice Smith', 'Bob Jones'],
           liamTyping: false,
         ),
-        'Ron Patrick and Elizabeth Patrick are typing...',
+        'Alice Smith and Bob Jones are typing...',
       );
     });
 
     test('falls back to a generic label for three or more', () {
       expect(
         typingIndicatorLabel(
-          otherTypingNames: const ['Ron Patrick', 'Elizabeth Patrick'],
+          otherTypingNames: const ['Alice Smith', 'Bob Jones'],
           liamTyping: true,
         ),
         'Several people are typing...',

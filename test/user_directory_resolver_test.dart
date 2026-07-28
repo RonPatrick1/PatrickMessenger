@@ -5,44 +5,44 @@ import 'package:patrick_messenger/matrix/user_directory_resolver.dart';
 void main() {
   const serverName = 'matrix.example.test';
   final profiles = <Profile>[
-    Profile(userId: '@ron_patrick:$serverName', displayName: 'Ron Patrick'),
-    Profile(userId: '@elizabeth:$serverName', displayName: 'Elizabeth Patrick'),
+    Profile(userId: '@alex_smith:$serverName', displayName: 'Alex Smith'),
+    Profile(userId: '@jamie:$serverName', displayName: 'Jamie Taylor'),
   ];
 
   group('selectExactMatch', () {
     test('resolves a human display name', () {
       final result = selectExactMatch(
-        query: 'Ron Patrick',
+        query: 'Alex Smith',
         serverName: serverName,
         profiles: profiles,
       );
 
-      expect(result?.userId, '@ron_patrick:$serverName');
+      expect(result?.userId, '@alex_smith:$serverName');
     });
 
     test('resolves a username and a complete account ID', () {
       expect(
         selectExactMatch(
-          query: 'ron_patrick',
+          query: 'alex_smith',
           serverName: serverName,
           profiles: profiles,
         )?.userId,
-        '@ron_patrick:$serverName',
+        '@alex_smith:$serverName',
       );
       expect(
         selectExactMatch(
-          query: '@ron_patrick:$serverName',
+          query: '@alex_smith:$serverName',
           serverName: serverName,
           profiles: profiles,
         )?.userId,
-        '@ron_patrick:$serverName',
+        '@alex_smith:$serverName',
       );
     });
 
     test('does not guess from a partial name', () {
       expect(
         selectExactMatch(
-          query: 'Ron',
+          query: 'Alex',
           serverName: serverName,
           profiles: profiles,
         ),
@@ -53,13 +53,13 @@ void main() {
     test('rejects ambiguous display names', () {
       expect(
         () => selectExactMatch(
-          query: 'Ron Patrick',
+          query: 'Alex Smith',
           serverName: serverName,
           profiles: [
             ...profiles,
             Profile(
-              userId: '@another_ron:$serverName',
-              displayName: 'Ron Patrick',
+              userId: '@another_alex:$serverName',
+              displayName: 'Alex Smith',
             ),
           ],
         ),
@@ -70,12 +70,12 @@ void main() {
     test('ignores accounts on another server', () {
       expect(
         selectExactMatch(
-          query: 'Ron Patrick',
+          query: 'Alex Smith',
           serverName: serverName,
           profiles: [
             Profile(
-              userId: '@ron:elsewhere.example',
-              displayName: 'Ron Patrick',
+              userId: '@alex:elsewhere.example',
+              displayName: 'Alex Smith',
             ),
           ],
         ),

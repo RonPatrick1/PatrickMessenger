@@ -3,27 +3,27 @@ import 'package:patrick_messenger/matrix/display_names.dart';
 
 void main() {
   test('computer-style Matrix localparts have a readable fallback', () {
-    expect(humanizeMatrixLocalpart('ron_patrick'), 'Ron Patrick');
+    expect(humanizeMatrixLocalpart('alex_smith'), 'Alex Smith');
     expect(humanizeMatrixLocalpart('mary-jane'), 'Mary Jane');
   });
 
   test('an explicitly selected display name is preserved', () {
     expect(
       readableMatrixProfileName(
-        userId: '@ron_patrick:example.test',
-        displayName: 'Ron Patrick',
+        userId: '@alex_smith:example.test',
+        displayName: 'Alex Smith',
       ),
-      'Ron Patrick',
+      'Alex Smith',
     );
   });
 
   test('a display name copied from the localpart is humanized', () {
     expect(
       readableMatrixProfileName(
-        userId: '@ron_patrick:example.test',
-        displayName: 'ron_patrick',
+        userId: '@alex_smith:example.test',
+        displayName: 'alex_smith',
       ),
-      'Ron Patrick',
+      'Alex Smith',
     );
   });
 }

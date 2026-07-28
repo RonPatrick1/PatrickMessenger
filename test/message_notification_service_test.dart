@@ -4,13 +4,13 @@ import 'package:patrick_messenger/archive/archive_contract.dart';
 import 'package:patrick_messenger/notifications/message_notification_service.dart';
 
 void main() {
-  const ownUser = '@ron:matrix.example';
+  const ownUser = '@alice:matrix.example';
 
   bool shouldNotify({
     bool ready = true,
     String type = EventTypes.Message,
     String? relationshipType,
-    String sender = '@elizabeth:matrix.example',
+    String sender = '@bob:matrix.example',
     String? transactionId,
   }) {
     return shouldNotifyForTimelineEvent(

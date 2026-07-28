@@ -20,6 +20,7 @@ import '../archive/archive_repository.dart';
 import '../export/conversation_export_service.dart';
 import '../history/timeline_key_recovery.dart';
 import '../matrix/display_names.dart';
+import '../matrix/timeline_event_merge.dart';
 import '../notifications/liam_chatter_visibility.dart';
 import '../receipts/message_receipt_service.dart';
 import '../search/search_index_service.dart';
@@ -352,17 +353,16 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     // Matrix normally inserts live events into Timeline before onUpdate. On
     // iOS we have observed the client-wide event stream advancing while an
-    // already-open Timeline remains stale. Overlay those live events by ID so
-    // the chat cannot hide messages that the client has already received.
-    final visibleEvents = <String, Event>{
-      for (final event in timeline.events) event.eventId: event,
-      ..._liveTimelineEvents,
-    };
-    return visibleEvents.values
+    // already-open Timeline remains stale. Overlay those live events by event
+    // or transaction identity so local echoes do not duplicate synced events.
+    final visibleEvents = mergeMatrixTimelineEvents(
+      timelineEvents: timeline.events,
+      liveEvents: _liveTimelineEvents.values,
+    );
+    return visibleEvents
         .where(
           (event) =>
-              (event.type == EventTypes.Message ||
-                  isUndecryptableEvent(event)) &&
+              event.type == EventTypes.Message &&
               event.relationshipType != RelationshipTypes.edit &&
               (!hideLiamChatter ||
                   !isLiamChatterEvent(event, liamUserId: widget.liamUserId)),
@@ -480,13 +480,17 @@ class _ChatScreenState extends State<ChatScreen> {
     return timeline.events
         .where(
           (event) =>
-              (event.type == EventTypes.Message ||
-                  isUndecryptableEvent(event)) &&
+              event.type == EventTypes.Message &&
               event.relationshipType != RelationshipTypes.edit &&
               isLiamChatterEvent(event, liamUserId: widget.liamUserId),
         )
         .length;
   }
+
+  int _undecryptableEventCount(Timeline timeline) => mergeMatrixTimelineEvents(
+    timelineEvents: timeline.events,
+    liveEvents: _liveTimelineEvents.values,
+  ).where(isUndecryptableEvent).length;
 
   void _markLatestMessageRead() {
     final timeline = _timeline;
@@ -1720,6 +1724,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final hiddenLiamCount = timeline == null
         ? 0
         : _hiddenLiamChatterCount(timeline);
+    final undecryptableEventCount = timeline == null
+        ? 0
+        : _undecryptableEventCount(timeline);
 
     return Scaffold(
       appBar: _selectionMode
@@ -1965,6 +1972,20 @@ class _ChatScreenState extends State<ChatScreen> {
                       hiddenLiamCount == 1
                           ? '1 Liam message hidden'
                           : '$hiddenLiamCount Liam messages hidden',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                if (undecryptableEventCount > 0 && !_selectionMode)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                    child: Text(
+                      undecryptableEventCount == 1
+                          ? '1 encrypted item is waiting for its key'
+                          : '$undecryptableEventCount encrypted items are '
+                                'waiting for their keys',
                       style: TextStyle(
                         fontSize: 11,
                         color: Theme.of(context).colorScheme.onSurfaceVariant,

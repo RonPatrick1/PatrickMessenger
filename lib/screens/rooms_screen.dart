@@ -176,7 +176,8 @@ class RoomsScreen extends StatelessWidget {
         builder: (context) => AlertDialog(
           title: const Text('Accept invitation?'),
           content: Text(
-            'Join ${room.getLocalizedDisplayname()} on your private server?',
+            '${readableMatrixInviterName(room)} invited you to an encrypted '
+            'conversation. Join it?',
           ),
           actions: [
             TextButton(
