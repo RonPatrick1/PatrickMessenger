@@ -68,6 +68,10 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  static const _initialMatrixMessageCount = 50;
+  static const _initialArchiveMessageCount = 200;
+  static const _archiveHistoryPageSize = 200;
+
   final TextEditingController _messageController = EmojiTextEditingController(
     emojiTextStyle: emojiGlyphStyle(),
   );
@@ -99,6 +103,8 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _highlightMessageId;
   bool _didJumpToInitialResult = false;
   int _visibleItemCount = 0;
+  int _visibleArchiveMessageCount = _initialArchiveMessageCount;
+  List<ArchiveMessage> _archiveMessages = const [];
 
   bool get _selectionMode => _selectedEventIds.isNotEmpty;
   bool get _liamJoined => widget.room
@@ -117,11 +123,14 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     widget.liamChatterVisibility.addListener(_handlePreferencesChanged);
     widget.archive.addListener(_handleArchiveChanged);
+    _archiveMessages = widget.archive.messages;
     unawaited(
-      widget.archive.load().then((_) {
+      widget.archive.loadRecent().then((_) {
         if (!mounted) return;
-        unawaited(widget.searchIndex.indexArchiveRoom(widget.archive));
-        setState(() {});
+        final initialResult = widget.initialSearchResult;
+        if (initialResult?.sourceKind == SearchSourceKind.archive) {
+          unawaited(_scrollToSearchResult(initialResult!));
+        }
       }),
     );
     widget.room.getTimeline(onUpdate: _handleTimelineUpdate).then((timeline) {
@@ -183,7 +192,8 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _prepareInitialTimeline(Timeline timeline) async {
-    if (_messages(timeline).length < 20 && timeline.canRequestHistory) {
+    if (_messages(timeline).length < _initialMatrixMessageCount &&
+        timeline.canRequestHistory) {
       if (mounted) setState(() => _loadingHistory = true);
       try {
         // Shared Search uses encrypted custom events in the conversation for
@@ -192,10 +202,13 @@ class _ChatScreenState extends State<ChatScreen> {
         // page and push every real message outside the loaded window.
         for (var page = 0; page < 20; page++) {
           if (!mounted || !identical(_timeline, timeline)) return;
-          if (_messages(timeline).length >= 20 || !timeline.canRequestHistory) {
+          if (_messages(timeline).length >= _initialMatrixMessageCount ||
+              !timeline.canRequestHistory) {
             break;
           }
+          final previousEventCount = timeline.events.length;
           await timeline.requestHistory(historyCount: 100);
+          if (timeline.events.length == previousEventCount) break;
         }
       } catch (_) {
         // The normal manual history control remains available if automatic
@@ -222,7 +235,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void _handleArchiveChanged() {
     if (!mounted) return;
     unawaited(widget.searchIndex.indexArchiveRoom(widget.archive));
-    setState(() {});
+    final messages = widget.archive.messages;
+    setState(() => _archiveMessages = messages);
   }
 
   Future<void> _toggleLiamChatterHidden() async {
@@ -280,15 +294,40 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  bool _hasOlderMessages(Timeline timeline) =>
+      timeline.canRequestHistory ||
+      _visibleArchiveMessageCount < _archiveMessages.length ||
+      widget.archive.canLoadOlder;
+
   Future<void> _loadMoreHistory() async {
     final timeline = _timeline;
-    if (timeline == null || _loadingHistory || !timeline.canRequestHistory) {
+    if (timeline == null || _loadingHistory || !_hasOlderMessages(timeline)) {
       return;
     }
+
+    final requestMatrixHistory = timeline.canRequestHistory;
+    final targetArchiveCount =
+        _visibleArchiveMessageCount + _archiveHistoryPageSize;
+    final requestArchiveHistory =
+        widget.archive.canLoadOlder &&
+        targetArchiveCount > _archiveMessages.length;
     setState(() => _loadingHistory = true);
     try {
-      await timeline.requestHistory(historyCount: 100);
-      await _recoverVisibleHistoryKeys(timeline);
+      await Future.wait([
+        if (requestMatrixHistory) timeline.requestHistory(historyCount: 100),
+        if (requestArchiveHistory) widget.archive.loadOlder(),
+      ]);
+      if (requestMatrixHistory) {
+        await _recoverVisibleHistoryKeys(timeline);
+      }
+      if (mounted) {
+        setState(() {
+          _visibleArchiveMessageCount = min(
+            _archiveMessages.length,
+            targetArchiveCount,
+          );
+        });
+      }
     } catch (_) {
       if (mounted) _showError('Older messages could not be downloaded.');
     } finally {
@@ -334,7 +373,9 @@ class _ChatScreenState extends State<ChatScreen> {
   List<_ChatItem> _chatItems(Timeline timeline) {
     final items = <_ChatItem>[
       ..._messages(timeline).map(_ChatItem.matrix),
-      ...widget.archive.messages.map(_ChatItem.archive),
+      ..._archiveMessages
+          .take(_visibleArchiveMessageCount)
+          .map(_ChatItem.archive),
     ];
     items.sort((a, b) {
       final time = b.timestamp.compareTo(a.timestamp);
@@ -380,6 +421,23 @@ class _ChatScreenState extends State<ChatScreen> {
     if (timeline == null || _loadingSearchResult) return;
     _loadingSearchResult = true;
     try {
+      if (result.sourceKind == SearchSourceKind.archive) {
+        await widget.archive.loadUntilMessage(result.sourceId);
+        if (!mounted) return;
+        final archiveMessages = widget.archive.messages;
+        final archiveIndex = archiveMessages.indexWhere(
+          (message) => message.id == result.sourceId,
+        );
+        if (archiveIndex >= 0) {
+          setState(() {
+            _archiveMessages = archiveMessages;
+            _visibleArchiveMessageCount = max(
+              _visibleArchiveMessageCount,
+              archiveIndex + 1,
+            );
+          });
+        }
+      }
       var items = _chatItems(timeline);
       if (result.sourceKind == SearchSourceKind.matrix &&
           !items.any((item) => item.id == result.sourceId)) {
@@ -1811,7 +1869,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             padding: const EdgeInsets.fromLTRB(14, 12, 14, 18),
                             itemCount:
                                 messages.length +
-                                (timeline.canRequestHistory ? 1 : 0),
+                                (_hasOlderMessages(timeline) ? 1 : 0),
                             itemBuilder: (context, index) {
                               if (index == messages.length) {
                                 return Center(

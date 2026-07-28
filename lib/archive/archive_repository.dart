@@ -43,7 +43,13 @@ class ArchiveRoomData extends ChangeNotifier {
   StreamSubscription<Event>? _timelineSubscription;
   StreamSubscription<SyncUpdate>? _syncSubscription;
   final Set<String> _attemptedManifestIds = {};
-  Future<void>? _loading;
+  final Set<String> _knownChunkIds = {};
+  final List<_PendingArchiveChunk> _pendingChunks = [];
+  final List<Event> _knownOverlayEvents = [];
+  Future<void>? _preparing;
+  Future<void>? _loadingOlder;
+  bool _knownOverlaysLoaded = false;
+  bool _recentChunkLoaded = false;
   String? error;
 
   ArchiveRoomData(this.room) {
@@ -57,8 +63,7 @@ class ArchiveRoomData extends ChangeNotifier {
               .whereType<String>()
               .toSet();
       if (manifestIds.difference(_attemptedManifestIds).isEmpty) return;
-      _loading = null;
-      unawaited(load());
+      unawaited(loadRecent());
     });
   }
 
@@ -70,9 +75,71 @@ class ArchiveRoomData extends ChangeNotifier {
 
   ArchiveMessage? message(String id) => _display[id];
 
-  Future<void> load() => _loading ??= _load();
+  bool get canLoadOlder => _pendingChunks.isNotEmpty;
 
-  Future<void> _load() async {
+  /// Loads only the newest imported-history chunk so a conversation can open
+  /// at its latest messages without downloading and parsing the full archive.
+  Future<void> loadRecent() async {
+    await _prepare();
+    if (!_recentChunkLoaded && canLoadOlder) {
+      await loadOlder();
+      _recentChunkLoaded = true;
+    }
+  }
+
+  /// Loads the next oldest imported-history chunks.
+  Future<void> loadOlder({int chunkCount = 1}) async {
+    await _prepare();
+    final inProgress = _loadingOlder;
+    if (inProgress != null) {
+      await inProgress;
+      return;
+    }
+    final future = _loadOlderChunks(chunkCount);
+    _loadingOlder = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_loadingOlder, future)) _loadingOlder = null;
+    }
+  }
+
+  /// Loads the complete imported archive for explicit full-history work such
+  /// as export and shared-search backfill.
+  Future<void> load() async {
+    await _prepare();
+    while (canLoadOlder) {
+      final inProgress = _loadingOlder;
+      if (inProgress != null) {
+        await inProgress;
+      } else {
+        await loadOlder(chunkCount: _pendingChunks.length);
+      }
+    }
+  }
+
+  Future<bool> loadUntilMessage(String messageId) async {
+    await loadRecent();
+    while (!_display.containsKey(messageId) && canLoadOlder) {
+      await loadOlder();
+    }
+    return _display.containsKey(messageId);
+  }
+
+  Future<void> _prepare() async {
+    final inProgress = _preparing;
+    if (inProgress != null) return inProgress;
+    final future = _prepareManifests();
+    _preparing = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_preparing, future)) _preparing = null;
+    }
+  }
+
+  Future<void> _prepareManifests() async {
+    var foundNewChunks = false;
     try {
       await room.postLoad();
       final pointers = room.states[archivePointerStateType]?.values ?? const [];
@@ -108,33 +175,70 @@ class ArchiveRoomData extends ChangeNotifier {
           error = 'Update Patrick Messenger to view this history.';
           continue;
         }
-        for (final chunk in manifest.chunks) {
-          final compressed = await download(chunk);
-          final decoded = GZipDecoder().decodeBytes(compressed);
-          final values = jsonDecode(utf8.decode(decoded));
-          if (values is! List) continue;
-          for (final value in values.whereType<Map>()) {
-            final message = ArchiveMessage.fromJson(
-              Map<String, dynamic>.from(value),
-            );
-            _original.putIfAbsent(message.id, () => message);
-            _display.putIfAbsent(message.id, () => message);
-            _messageManifestEvents[message.id] = manifestEventId;
-          }
+        for (var index = 0; index < manifest.chunks.length; index++) {
+          final chunkId = '$manifestEventId:$index';
+          if (!_knownChunkIds.add(chunkId)) continue;
+          foundNewChunks = true;
+          _pendingChunks.add(
+            _PendingArchiveChunk(
+              ref: manifest.chunks[index],
+              manifestEventId: manifestEventId,
+              manifestLastTimestamp: manifest.lastTimestamp,
+              index: index,
+            ),
+          );
         }
       }
-      await _applyKnownOverlays();
+      _pendingChunks.sort((a, b) {
+        final byManifest = b.manifestLastTimestamp.compareTo(
+          a.manifestLastTimestamp,
+        );
+        return byManifest != 0 ? byManifest : b.index.compareTo(a.index);
+      });
+      if (foundNewChunks) _recentChunkLoaded = false;
+      await _loadKnownOverlays();
     } catch (loadError) {
       error = 'Signal history could not be loaded: $loadError';
+    }
+  }
+
+  Future<void> _loadOlderChunks(int chunkCount) async {
+    var loaded = 0;
+    while (loaded < chunkCount && _pendingChunks.isNotEmpty) {
+      final pending = _pendingChunks.removeAt(0);
+      try {
+        final compressed = await download(pending.ref);
+        final decoded = GZipDecoder().decodeBytes(compressed);
+        final values = jsonDecode(utf8.decode(decoded));
+        if (values is! List) continue;
+        for (final value in values.whereType<Map>()) {
+          final message = ArchiveMessage.fromJson(
+            Map<String, dynamic>.from(value),
+          );
+          _original.putIfAbsent(message.id, () => message);
+          _display.putIfAbsent(message.id, () => message);
+          _messageManifestEvents[message.id] = pending.manifestEventId;
+        }
+        loaded++;
+      } catch (loadError) {
+        error = 'Some Signal history could not be loaded: $loadError';
+      }
+    }
+    for (final event in _knownOverlayEvents) {
+      _applyOverlay(event);
     }
     notifyListeners();
   }
 
-  Future<void> _applyKnownOverlays() async {
+  Future<void> _loadKnownOverlays() async {
+    if (_knownOverlaysLoaded) return;
+    _knownOverlaysLoaded = true;
     final timeline = await room.getTimeline();
     try {
       for (final event in timeline.events.reversed) {
-        _applyOverlay(event);
+        if (event.type == archiveOverlayEventType) {
+          _knownOverlayEvents.add(event);
+        }
       }
     } finally {
       timeline.cancelSubscriptions();
@@ -142,6 +246,12 @@ class ArchiveRoomData extends ChangeNotifier {
   }
 
   void _handleTimelineEvent(Event event) {
+    if (event.type == archiveOverlayEventType) {
+      _knownOverlayEvents.removeWhere(
+        (known) => known.eventId == event.eventId,
+      );
+      _knownOverlayEvents.add(event);
+    }
     if (_applyOverlay(event)) notifyListeners();
   }
 
@@ -277,4 +387,18 @@ class ArchiveRoomData extends ChangeNotifier {
     _syncSubscription?.cancel();
     super.dispose();
   }
+}
+
+class _PendingArchiveChunk {
+  final ArchiveEncryptedFileRef ref;
+  final String manifestEventId;
+  final DateTime manifestLastTimestamp;
+  final int index;
+
+  const _PendingArchiveChunk({
+    required this.ref,
+    required this.manifestEventId,
+    required this.manifestLastTimestamp,
+    required this.index,
+  });
 }

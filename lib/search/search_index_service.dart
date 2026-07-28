@@ -228,7 +228,6 @@ class SearchIndexService extends ChangeNotifier {
 
   Future<void> indexArchiveRoom(ArchiveRoomData archive) async {
     if (sharedSearch.isJoined(archive.room)) return;
-    await archive.load();
     for (final message in archive.messages) {
       if (sharedSearch.isJoined(archive.room)) return;
       if (message.deleted) {
@@ -525,7 +524,7 @@ class SearchIndexService extends ChangeNotifier {
     String senderName;
     if (kind == SearchSourceKind.archive) {
       final archive = archives.forRoom(room);
-      await archive.load();
+      await archive.loadUntilMessage(hit.sourceId);
       final message = archive.message(hit.sourceId);
       if (message == null) return null;
       senderName = message.authorName;
@@ -576,7 +575,7 @@ class SearchIndexService extends ChangeNotifier {
       final room = client.getRoomById(roomId);
       if (room == null) return null;
       final archive = archives.forRoom(room);
-      await archive.load();
+      await archive.loadUntilMessage(sourceId);
       final message = archive.message(sourceId);
       if (message == null) return null;
       final text = message.searchableText;
