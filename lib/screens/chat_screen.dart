@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -93,7 +94,10 @@ class _ChatScreenState extends State<ChatScreen> {
   SharedSearchProgress? _sharedSearchProgress;
   bool _exportingConversation = false;
   ConversationExportProgress? _exportProgress;
+  final Map<int, Offset> _textScalePointers = <int, Offset>{};
   double? _pinchStartTextScale;
+  double? _pinchStartDistance;
+  bool _showJumpToLatest = false;
   List<User> _typingUsers = [];
   StreamSubscription<SyncUpdate>? _typingSubscription;
   StreamSubscription<Event>? _timelineEventSubscription;
@@ -115,6 +119,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_handleHardwareKeyboard);
     _itemPositions.itemPositions.addListener(_handleScroll);
     _messageController.addListener(_handleComposerTextChanged);
     _typingSubscription = widget.room.client.onSync.stream.listen(
@@ -149,6 +154,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKeyboard);
     _timelineRefreshTimer?.cancel();
     _timelineEventSubscription?.cancel();
     _timeline?.cancelSubscriptions();
@@ -284,12 +290,38 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _handleScroll() {
-    if (_loadingHistory || _visibleItemCount == 0) return;
+    if (_visibleItemCount == 0) return;
     final positions = _itemPositions.itemPositions.value;
-    if (positions.isNotEmpty &&
+    if (positions.isEmpty) return;
+
+    final showJumpToLatest = positions.every((position) => position.index != 0);
+    if (showJumpToLatest != _showJumpToLatest && mounted) {
+      setState(() => _showJumpToLatest = showJumpToLatest);
+    }
+
+    if (!_loadingHistory &&
         positions.map((position) => position.index).reduce(max) >=
             _visibleItemCount - 3) {
       unawaited(_loadMoreHistory());
+    }
+  }
+
+  bool _handleHardwareKeyboard(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.end ||
+        (!HardwareKeyboard.instance.isControlPressed &&
+            !HardwareKeyboard.instance.isMetaPressed)) {
+      return false;
+    }
+    _jumpToLatest();
+    return true;
+  }
+
+  void _jumpToLatest() {
+    if (!_itemScrollController.isAttached || _visibleItemCount == 0) return;
+    _itemScrollController.jumpTo(index: 0);
+    if (_showJumpToLatest && mounted) {
+      setState(() => _showJumpToLatest = false);
     }
   }
 
@@ -887,24 +919,50 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _startTextPinch(ScaleStartDetails details) {
-    if (details.pointerCount >= 2) {
-      _pinchStartTextScale = widget.textScaleController.scale;
+  bool _isTextScalePointer(PointerEvent event) =>
+      event.kind == PointerDeviceKind.touch ||
+      event.kind == PointerDeviceKind.stylus;
+
+  void _handleTextScalePointerDown(PointerDownEvent event) {
+    if (!_isTextScalePointer(event)) return;
+    if (_textScalePointers.length >= 2) return;
+    _textScalePointers[event.pointer] = event.position;
+    if (_textScalePointers.length == 2) {
+      _beginTextPinch();
     }
   }
 
-  void _updateTextPinch(ScaleUpdateDetails details) {
-    if (details.pointerCount < 2) return;
+  void _handleTextScalePointerMove(PointerMoveEvent event) {
+    if (!_textScalePointers.containsKey(event.pointer)) return;
+    _textScalePointers[event.pointer] = event.position;
+    if (_textScalePointers.length < 2) return;
+    _pinchStartDistance ??= _currentTextPinchDistance();
     _pinchStartTextScale ??= widget.textScaleController.scale;
+    final startDistance = _pinchStartDistance!;
+    if (startDistance <= 0) return;
     widget.textScaleController.previewScale(
-      _pinchStartTextScale! * details.scale,
+      _pinchStartTextScale! * (_currentTextPinchDistance() / startDistance),
     );
   }
 
-  void _finishTextPinch(ScaleEndDetails details) {
-    if (_pinchStartTextScale == null) return;
+  void _handleTextScalePointerEnd(PointerEvent event) {
+    if (!_textScalePointers.containsKey(event.pointer)) return;
+    _textScalePointers.remove(event.pointer);
+    if (_textScalePointers.length >= 2 || _pinchStartTextScale == null) return;
     _pinchStartTextScale = null;
+    _pinchStartDistance = null;
     unawaited(widget.textScaleController.persistScale());
+  }
+
+  void _beginTextPinch() {
+    _pinchStartTextScale = widget.textScaleController.scale;
+    _pinchStartDistance = _currentTextPinchDistance();
+  }
+
+  double _currentTextPinchDistance() {
+    final points = _textScalePointers.values.take(2).toList();
+    if (points.length < 2) return 0;
+    return (points.first - points.last).distance;
   }
 
   Future<void> _pasteFromClipboard() async {
@@ -1821,210 +1879,238 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
       body: timeline == null
           ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                if (_sharedSearchProgress case final progress?)
-                  Material(
-                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            progress.message,
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                          const SizedBox(height: 6),
-                          LinearProgressIndicator(value: progress.fraction),
-                        ],
+          : Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: _handleTextScalePointerDown,
+              onPointerMove: _handleTextScalePointerMove,
+              onPointerUp: _handleTextScalePointerEnd,
+              onPointerCancel: _handleTextScalePointerEnd,
+              child: Column(
+                children: [
+                  if (_sharedSearchProgress case final progress?)
+                    Material(
+                      color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              progress.message,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                            const SizedBox(height: 6),
+                            LinearProgressIndicator(value: progress.fraction),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                if (_exportProgress case final progress?)
-                  Material(
-                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            progress.message,
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                          const SizedBox(height: 6),
-                          LinearProgressIndicator(value: progress.fraction),
-                        ],
+                  if (_exportProgress case final progress?)
+                    Material(
+                      color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              progress.message,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                            const SizedBox(height: 6),
+                            LinearProgressIndicator(value: progress.fraction),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                Expanded(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onScaleStart: _startTextPinch,
-                    onScaleUpdate: _updateTextPinch,
-                    onScaleEnd: _finishTextPinch,
-                    child: messages.isEmpty
-                        ? const _EmptyConversation()
-                        : ScrollablePositionedList.builder(
-                            itemScrollController: _itemScrollController,
-                            itemPositionsListener: _itemPositions,
-                            reverse: true,
-                            padding: const EdgeInsets.fromLTRB(14, 12, 14, 18),
-                            itemCount:
-                                messages.length +
-                                (_hasOlderMessages(timeline) ? 1 : 0),
-                            itemBuilder: (context, index) {
-                              if (index == messages.length) {
-                                return Center(
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(12),
-                                    child: _loadingHistory
-                                        ? const CircularProgressIndicator()
-                                        : TextButton.icon(
-                                            onPressed: _loadMoreHistory,
-                                            icon: const Icon(Icons.history),
-                                            label: const Text(
-                                              'Load older messages',
-                                            ),
-                                          ),
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        Positioned.fill(
+                          child: messages.isEmpty
+                              ? const _EmptyConversation()
+                              : ScrollablePositionedList.builder(
+                                  itemScrollController: _itemScrollController,
+                                  itemPositionsListener: _itemPositions,
+                                  reverse: true,
+                                  padding: const EdgeInsets.fromLTRB(
+                                    14,
+                                    12,
+                                    14,
+                                    18,
                                   ),
-                                );
-                              }
-                              final item = messages[index];
-                              final archiveMessage = item.archiveMessage;
-                              if (archiveMessage != null) {
-                                return AnimatedContainer(
-                                  duration: const Duration(milliseconds: 250),
-                                  color: _highlightMessageId == item.id
-                                      ? Theme.of(context)
-                                            .colorScheme
-                                            .tertiaryContainer
-                                            .withValues(alpha: 0.35)
-                                      : Colors.transparent,
-                                  child: ArchiveMessageBubble(
-                                    key: ValueKey(item.id),
-                                    message: archiveMessage,
-                                    archive: widget.archive,
-                                    mine:
-                                        archiveMessage.authorMatrixId ==
-                                        widget.room.client.userID,
-                                    onOpenActions: () =>
-                                        _openArchiveMessageActions(
-                                          archiveMessage,
+                                  itemCount:
+                                      messages.length +
+                                      (_hasOlderMessages(timeline) ? 1 : 0),
+                                  itemBuilder: (context, index) {
+                                    if (index == messages.length) {
+                                      return Center(
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(12),
+                                          child: _loadingHistory
+                                              ? const CircularProgressIndicator()
+                                              : TextButton.icon(
+                                                  onPressed: _loadMoreHistory,
+                                                  icon: const Icon(
+                                                    Icons.history,
+                                                  ),
+                                                  label: const Text(
+                                                    'Load older messages',
+                                                  ),
+                                                ),
                                         ),
-                                    onReaction: (emoji) =>
-                                        widget.archive.toggleReaction(
-                                          archiveMessage.id,
-                                          emoji,
+                                      );
+                                    }
+                                    final item = messages[index];
+                                    final archiveMessage = item.archiveMessage;
+                                    if (archiveMessage != null) {
+                                      return AnimatedContainer(
+                                        duration: const Duration(
+                                          milliseconds: 250,
                                         ),
-                                  ),
-                                );
-                              }
-                              final event = item.event!;
-                              final actionsEnabled = !isUndecryptableEvent(
-                                event,
-                              );
-                              return AnimatedContainer(
-                                duration: const Duration(milliseconds: 250),
-                                color: _highlightMessageId == item.id
-                                    ? Theme.of(context)
-                                          .colorScheme
-                                          .tertiaryContainer
-                                          .withValues(alpha: 0.35)
-                                    : Colors.transparent,
-                                child: MessageBubble(
-                                  key: ValueKey(event.eventId),
-                                  event: event,
-                                  timeline: timeline,
-                                  mine:
-                                      event.senderId ==
-                                      widget.room.client.userID,
-                                  selectionMode: _selectionMode,
-                                  selected: _selectedEventIds.contains(
-                                    event.eventId,
-                                  ),
-                                  pinned: widget.room.pinnedEventIds.contains(
-                                    event.eventId,
-                                  ),
-                                  actionsEnabled: actionsEnabled,
-                                  liamUserId: widget.liamUserId,
-                                  receiptService: widget.receiptService,
-                                  archive: widget.archive,
-                                  onOpenActions: () =>
-                                      _openMessageActions(event),
-                                  onSelectionTap: () => _toggleSelected(event),
-                                  onReaction: (emoji) =>
-                                      _toggleReaction(event, emoji),
+                                        color: _highlightMessageId == item.id
+                                            ? Theme.of(context)
+                                                  .colorScheme
+                                                  .tertiaryContainer
+                                                  .withValues(alpha: 0.35)
+                                            : Colors.transparent,
+                                        child: ArchiveMessageBubble(
+                                          key: ValueKey(item.id),
+                                          message: archiveMessage,
+                                          archive: widget.archive,
+                                          mine:
+                                              archiveMessage.authorMatrixId ==
+                                              widget.room.client.userID,
+                                          onOpenActions: () =>
+                                              _openArchiveMessageActions(
+                                                archiveMessage,
+                                              ),
+                                          onReaction: (emoji) =>
+                                              widget.archive.toggleReaction(
+                                                archiveMessage.id,
+                                                emoji,
+                                              ),
+                                        ),
+                                      );
+                                    }
+                                    final event = item.event!;
+                                    final actionsEnabled =
+                                        !isUndecryptableEvent(event);
+                                    return AnimatedContainer(
+                                      duration: const Duration(
+                                        milliseconds: 250,
+                                      ),
+                                      color: _highlightMessageId == item.id
+                                          ? Theme.of(context)
+                                                .colorScheme
+                                                .tertiaryContainer
+                                                .withValues(alpha: 0.35)
+                                          : Colors.transparent,
+                                      child: MessageBubble(
+                                        key: ValueKey(event.eventId),
+                                        event: event,
+                                        timeline: timeline,
+                                        mine:
+                                            event.senderId ==
+                                            widget.room.client.userID,
+                                        selectionMode: _selectionMode,
+                                        selected: _selectedEventIds.contains(
+                                          event.eventId,
+                                        ),
+                                        pinned: widget.room.pinnedEventIds
+                                            .contains(event.eventId),
+                                        actionsEnabled: actionsEnabled,
+                                        liamUserId: widget.liamUserId,
+                                        receiptService: widget.receiptService,
+                                        archive: widget.archive,
+                                        onOpenActions: () =>
+                                            _openMessageActions(event),
+                                        onSelectionTap: () =>
+                                            _toggleSelected(event),
+                                        onReaction: (emoji) =>
+                                            _toggleReaction(event, emoji),
+                                      ),
+                                    );
+                                  },
                                 ),
-                              );
-                            },
+                        ),
+                        if (_showJumpToLatest)
+                          Positioned(
+                            right: 16,
+                            bottom: 12,
+                            child: IconButton.filledTonal(
+                              onPressed: _jumpToLatest,
+                              tooltip: 'Jump to latest message',
+                              icon: const Icon(Icons.keyboard_arrow_down),
+                            ),
                           ),
-                  ),
-                ),
-                if (hiddenLiamCount > 0 && !_selectionMode)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-                    child: Text(
-                      hiddenLiamCount == 1
-                          ? '1 Liam message hidden'
-                          : '$hiddenLiamCount Liam messages hidden',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
+                      ],
                     ),
                   ),
-                if (undecryptableEventCount > 0 && !_selectionMode)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-                    child: Text(
-                      undecryptableEventCount == 1
-                          ? '1 encrypted item is waiting for its key'
-                          : '$undecryptableEventCount encrypted items are '
-                                'waiting for their keys',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  if (hiddenLiamCount > 0 && !_selectionMode)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                      child: Text(
+                        hiddenLiamCount == 1
+                            ? '1 Liam message hidden'
+                            : '$hiddenLiamCount Liam messages hidden',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
                       ),
                     ),
-                  ),
-                if (_typingUsers.isNotEmpty && !_selectionMode)
-                  TypingIndicatorBar(label: _typingLabel()),
-                if (!_selectionMode)
-                  ChatComposer(
-                    controller: _messageController,
-                    focusNode: _messageFocusNode,
-                    sendingAttachment:
-                        _sendingAttachment || _changingSharedSearch,
-                    liamJoined: _liamJoined,
-                    sharedSearchJoined: _sharedSearchJoined,
-                    contextLabel:
-                        _editingEvent != null || _editingArchiveMessage != null
-                        ? 'Editing message'
-                        : _replyTo != null
-                        ? 'Replying to ${readableMatrixUserName(_replyTo!.senderFromMemoryOrFallback)}'
-                        : _archiveReplyTo != null
-                        ? 'Replying to ${_archiveReplyTo!.authorName}'
-                        : null,
-                    contextPreview:
-                        _editingArchiveMessage?.body ??
-                        _archiveReplyTo?.body ??
-                        (contextEvent == null
-                            ? null
-                            : visibleMessageBody(
-                                contextEvent.getDisplayEvent(timeline),
-                              )),
-                    onCancelContext: _cancelComposerContext,
-                    onSend: _sendText,
-                    onPaste: _pasteFromClipboard,
-                    onEmoji: () =>
-                        showComposerEmojiPicker(context, _messageController),
-                    onCamera: _takePicture,
-                    onAttachment: _sendAttachment,
-                  ),
-              ],
+                  if (undecryptableEventCount > 0 && !_selectionMode)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                      child: Text(
+                        undecryptableEventCount == 1
+                            ? '1 encrypted item is waiting for its key'
+                            : '$undecryptableEventCount encrypted items are '
+                                  'waiting for their keys',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  if (_typingUsers.isNotEmpty && !_selectionMode)
+                    TypingIndicatorBar(label: _typingLabel()),
+                  if (!_selectionMode)
+                    ChatComposer(
+                      controller: _messageController,
+                      focusNode: _messageFocusNode,
+                      sendingAttachment:
+                          _sendingAttachment || _changingSharedSearch,
+                      liamJoined: _liamJoined,
+                      sharedSearchJoined: _sharedSearchJoined,
+                      contextLabel:
+                          _editingEvent != null ||
+                              _editingArchiveMessage != null
+                          ? 'Editing message'
+                          : _replyTo != null
+                          ? 'Replying to ${readableMatrixUserName(_replyTo!.senderFromMemoryOrFallback)}'
+                          : _archiveReplyTo != null
+                          ? 'Replying to ${_archiveReplyTo!.authorName}'
+                          : null,
+                      contextPreview:
+                          _editingArchiveMessage?.body ??
+                          _archiveReplyTo?.body ??
+                          (contextEvent == null
+                              ? null
+                              : visibleMessageBody(
+                                  contextEvent.getDisplayEvent(timeline),
+                                )),
+                      onCancelContext: _cancelComposerContext,
+                      onSend: _sendText,
+                      onPaste: _pasteFromClipboard,
+                      onEmoji: () =>
+                          showComposerEmojiPicker(context, _messageController),
+                      onCamera: _takePicture,
+                      onAttachment: _sendAttachment,
+                    ),
+                ],
+              ),
             ),
     );
   }
