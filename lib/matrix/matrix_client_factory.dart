@@ -67,10 +67,9 @@ class MatrixClientFactory {
       receiptsPublicByDefault: false,
       requestHistoryOnLimitedTimeline: true,
     );
-    // Always prefer the currently configured endpoint over the URL stored in
-    // an existing session. This preserves the access token, device identity,
-    // encryption account, and room keys while migrating older mobile sessions
-    // away from the private-LAN homeserver URL to the public HTTPS proxy.
+    // Always prefer Patrick Messenger's production endpoint over a URL stored
+    // by an older client. This preserves the access token, device identity,
+    // encryption account, and room keys while finishing that migration.
     await client.init(newHomeserver: homeserver);
     return client;
   }

@@ -92,11 +92,10 @@ gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor"
 update-desktop-database "$HOME/.local/share/applications"
 ```
 
-The local HTTP override is desktop-only. Android and iPhone/iPad builds always
-use the public HTTPS endpoint at `https://patrick-lamphier.com`, even if an old
-build command still supplies `MATRIX_HOMESERVER_URL`. This prevents an
-installed phone app from becoming LAN-only. Matrix account IDs continue to use
-the server name `matrix.patrick-lamphier.com`.
+Every client uses the single public HTTPS endpoint at
+`https://patrick-lamphier.com`; the login screen does not expose a server
+selector. Matrix account IDs use the server name
+`matrix.patrick-lamphier.com`.
 
 On desktop, Enter sends the current message and Control+Enter inserts a
 newline. A hardware keyboard connected to an iPhone or iPad—including the Mac

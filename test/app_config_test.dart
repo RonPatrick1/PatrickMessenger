@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:patrick_messenger/config/app_config.dart';
 
@@ -56,10 +55,7 @@ void main() {
       expect(config.validate, throwsFormatException);
     });
 
-    test('mobile builds use the public HTTPS homeserver', () {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
-      addTearDown(() => debugDefaultTargetPlatformOverride = null);
-
+    test('all builds use the single public HTTPS homeserver', () {
       final config = AppConfig.fromEnvironment();
 
       expect(config.homeserver, Uri.parse('https://patrick-lamphier.com'));

@@ -60,7 +60,7 @@ class _LoginScreenState extends State<LoginScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Sign-in failed. Check the server, username, and password.',
+            'Sign-in failed. Check your username, password, and connection.',
           ),
         ),
       );
@@ -112,11 +112,9 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              'Private messaging on a server you trust.',
+                              'Private, end-to-end encrypted messaging.',
                               style: Theme.of(context).textTheme.bodyLarge,
                             ),
-                            const SizedBox(height: 24),
-                            _ServerStatus(url: widget.config.displayHomeserver),
                             const SizedBox(height: 24),
                             TextFormField(
                               controller: _usernameController,
@@ -204,41 +202,6 @@ class _LoginScreenState extends State<LoginScreen> {
                   controller: widget.themeController,
                 ),
               ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ServerStatus extends StatelessWidget {
-  final String url;
-
-  const _ServerStatus({required this.url});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: colors.secondaryContainer,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            Icons.dns_outlined,
-            size: 20,
-            color: colors.onSecondaryContainer,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              url,
-              style: TextStyle(color: colors.onSecondaryContainer),
-              overflow: TextOverflow.ellipsis,
             ),
           ),
         ],

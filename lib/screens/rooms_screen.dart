@@ -5,6 +5,7 @@ import '../config/app_config.dart';
 import '../archive/archive_repository.dart';
 import '../matrix/display_names.dart';
 import '../matrix/room_rename_permissions.dart';
+import '../matrix/user_directory_resolver.dart';
 import '../notifications/liam_chatter_visibility.dart';
 import '../notifications/message_notification_service.dart';
 import '../notifications/notification_preferences.dart';
@@ -239,30 +240,37 @@ class RoomsScreen extends StatelessWidget {
   }
 
   Future<void> _startConversation(BuildContext context) async {
-    final username = await showDialog<String>(
+    final accountName = await showDialog<String>(
       context: context,
-      builder: (_) => _NewConversationDialog(config: config),
+      builder: (_) => const _NewConversationDialog(),
     );
-    if (username == null || username.isEmpty || !context.mounted) return;
-
-    final matrixId = config.matrixIdFor(username);
-    if (!matrixId.endsWith(':${config.serverName}')) {
-      _showError(
-        context,
-        'Only people on ${config.serverName} can be messaged.',
-      );
-      return;
-    }
-    if (matrixId == client.userID) {
-      _showError(context, 'Choose another account.');
-      return;
-    }
+    if (accountName == null || accountName.isEmpty || !context.mounted) return;
 
     final messenger = ScaffoldMessenger.of(context);
     messenger.showSnackBar(
-      const SnackBar(content: Text('Creating an encrypted conversation…')),
+      const SnackBar(content: Text('Finding that account…')),
     );
     try {
+      final profile = await UserDirectoryResolver(
+        client: client,
+        config: config,
+      ).resolve(accountName);
+      final matrixId = profile.userId;
+      if (!context.mounted) return;
+
+      for (final room in client.rooms) {
+        if ((room.membership == Membership.join ||
+                room.membership == Membership.invite) &&
+            room.directChatMatrixID == matrixId) {
+          messenger.hideCurrentSnackBar();
+          await _openRoom(context, room);
+          return;
+        }
+      }
+
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Creating an encrypted conversation…')),
+      );
       final roomId = await client.createGroupChat(
         invite: [matrixId],
         enableEncryption: true,
@@ -276,6 +284,8 @@ class RoomsScreen extends StatelessWidget {
       if (room == null) throw StateError('Room was not returned by sync.');
       await room.addToDirectChat(matrixId);
       if (context.mounted) await _openRoom(context, room);
+    } on UserDirectoryResolutionException catch (error) {
+      if (context.mounted) _showError(context, error.message);
     } catch (_) {
       if (context.mounted) {
         _showError(context, 'The encrypted conversation could not be created.');
@@ -403,9 +413,7 @@ class _EmptyRooms extends StatelessWidget {
 }
 
 class _NewConversationDialog extends StatefulWidget {
-  final AppConfig config;
-
-  const _NewConversationDialog({required this.config});
+  const _NewConversationDialog();
 
   @override
   State<_NewConversationDialog> createState() => _NewConversationDialogState();
@@ -430,8 +438,8 @@ class _NewConversationDialogState extends State<_NewConversationDialog> {
         autocorrect: false,
         onSubmitted: (value) => _finish(value),
         decoration: InputDecoration(
-          labelText: 'Username',
-          helperText: 'Account on ${widget.config.serverName}',
+          labelText: 'Name or username',
+          helperText: 'For example: Ron Patrick or ron_patrick',
           helperMaxLines: 2,
         ),
       ),

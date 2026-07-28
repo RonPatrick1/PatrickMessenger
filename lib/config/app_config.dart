@@ -1,12 +1,9 @@
-import 'package:flutter/foundation.dart';
-
 class AppConfig {
   static const _productionHomeserver = 'https://patrick-lamphier.com';
   static const _productionServerName = 'matrix.patrick-lamphier.com';
   static const _productionLiamUserId = '@liam:matrix.patrick-lamphier.com';
   static const _productionSearchUserId = '@search:matrix.patrick-lamphier.com';
-  static const _productionGiphyApiKey =
-      'AZ4NP1gCNzC2rktp957hMNWbzR3A6Iko';
+  static const _productionGiphyApiKey = 'AZ4NP1gCNzC2rktp957hMNWbzR3A6Iko';
   static const _productionPushGateway =
       'https://patrick-lamphier.com/_matrix/push/v1/notify';
   static const _iosPushAppId = 'com.patricklamphier.patrickMessenger';
@@ -31,55 +28,31 @@ class AppConfig {
     this.iosPushAppId = _iosPushAppId,
   });
 
-  factory AppConfig.fromEnvironment() {
-    const configuredHomeserver = String.fromEnvironment(
-      'MATRIX_HOMESERVER_URL',
-      defaultValue: _productionHomeserver,
-    );
-    const configuredServerName = String.fromEnvironment(
-      'MATRIX_SERVER_NAME',
-      defaultValue: _productionServerName,
-    );
-    const configuredAllowInsecure = bool.fromEnvironment(
-      'ALLOW_INSECURE_DEVELOPMENT',
-    );
-    final usePublicMobileServer =
-        !kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.android ||
-            defaultTargetPlatform == TargetPlatform.iOS);
-
-    return AppConfig(
-      homeserver: Uri.parse(
-        usePublicMobileServer ? _productionHomeserver : configuredHomeserver,
-      ),
-      serverName: usePublicMobileServer
-          ? _productionServerName
-          : configuredServerName,
-      allowInsecureDevelopment: usePublicMobileServer
-          ? false
-          : configuredAllowInsecure,
-      giphyApiKey: const String.fromEnvironment(
-        'GIPHY_API_KEY',
-        defaultValue: _productionGiphyApiKey,
-      ),
-      liamUserId: const String.fromEnvironment(
-        'LIAM_MATRIX_USER_ID',
-        defaultValue: _productionLiamUserId,
-      ),
-      searchUserId: const String.fromEnvironment(
-        'SEARCH_MATRIX_USER_ID',
-        defaultValue: _productionSearchUserId,
-      ),
-      pushGatewayUrl: const String.fromEnvironment(
-        'MATRIX_PUSH_GATEWAY_URL',
-        defaultValue: _productionPushGateway,
-      ),
-      iosPushAppId: const String.fromEnvironment(
-        'IOS_PUSH_APP_ID',
-        defaultValue: _iosPushAppId,
-      ),
-    );
-  }
+  factory AppConfig.fromEnvironment() => AppConfig(
+    homeserver: Uri.parse(_productionHomeserver),
+    serverName: _productionServerName,
+    allowInsecureDevelopment: false,
+    giphyApiKey: const String.fromEnvironment(
+      'GIPHY_API_KEY',
+      defaultValue: _productionGiphyApiKey,
+    ),
+    liamUserId: const String.fromEnvironment(
+      'LIAM_MATRIX_USER_ID',
+      defaultValue: _productionLiamUserId,
+    ),
+    searchUserId: const String.fromEnvironment(
+      'SEARCH_MATRIX_USER_ID',
+      defaultValue: _productionSearchUserId,
+    ),
+    pushGatewayUrl: const String.fromEnvironment(
+      'MATRIX_PUSH_GATEWAY_URL',
+      defaultValue: _productionPushGateway,
+    ),
+    iosPushAppId: const String.fromEnvironment(
+      'IOS_PUSH_APP_ID',
+      defaultValue: _iosPushAppId,
+    ),
+  );
 
   void validate() {
     if (!homeserver.hasScheme || homeserver.host.isEmpty) {
@@ -129,14 +102,5 @@ class AppConfig {
       return trimmed;
     }
     return '@$trimmed:$serverName';
-  }
-
-  String get displayHomeserver {
-    final defaultPort =
-        (homeserver.scheme == 'https' && homeserver.port == 443) ||
-        (homeserver.scheme == 'http' && homeserver.port == 80);
-    return defaultPort
-        ? '${homeserver.scheme}://${homeserver.host}'
-        : '${homeserver.scheme}://${homeserver.host}:${homeserver.port}';
   }
 }

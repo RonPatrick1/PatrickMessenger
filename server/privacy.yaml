@@ -36,8 +36,12 @@ require_auth_for_profile_requests: true
 limit_profile_requests_to_users_who_share_rooms: true
 
 user_directory:
-  enabled: false
-  search_all_users: false
+  # Only signed-in users can use this standard Matrix endpoint. Searching all
+  # local accounts lets Patrick Messenger resolve a human display name to the
+  # real Matrix ID before creating an invitation.
+  enabled: true
+  search_all_users: true
+  prefer_local_users: true
 
 presence:
   enabled: false
