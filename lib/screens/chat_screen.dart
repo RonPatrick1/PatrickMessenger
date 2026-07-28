@@ -3,7 +3,6 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:file_selector/file_selector.dart';
-import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -73,9 +72,8 @@ class _ChatScreenState extends State<ChatScreen> {
   static const _initialArchiveMessageCount = 200;
   static const _archiveHistoryPageSize = 200;
 
-  final TextEditingController _messageController = EmojiTextEditingController(
-    emojiTextStyle: emojiGlyphStyle(),
-  );
+  final TextEditingController _messageController =
+      ColorEmojiTextEditingController(emojiTextStyle: emojiGlyphStyle());
   final _messageFocusNode = FocusNode();
   final _itemScrollController = ItemScrollController();
   final _itemPositions = ItemPositionsListener.create();
