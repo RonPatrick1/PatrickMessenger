@@ -82,7 +82,7 @@ void main() {
     Event event,
     Timeline timeline, {
     bool selectionMode = false,
-    VoidCallback? onReaction,
+    ValueChanged<String>? onReaction,
     VoidCallback? onReply,
     VoidCallback? onOpenActions,
   }) {
@@ -99,7 +99,7 @@ void main() {
           liamUserId: '@liam:matrix.example.test',
           onOpenActions: onOpenActions ?? () {},
           onSelectionTap: () {},
-          onReaction: (_) => onReaction?.call(),
+          onReaction: onReaction ?? (_) {},
           onReply: onReply ?? () {},
           receiptService: receiptService,
           archive: archive,
@@ -124,9 +124,9 @@ void main() {
       ),
     );
 
-    var tapped = '';
+    String? tapped;
     await tester.pumpWidget(
-      pump(event, timeline, onReaction: () => tapped = 'tapped'),
+      pump(event, timeline, onReaction: (emoji) => tapped = emoji),
     );
 
     expect(find.text('👍'), findsOneWidget);
@@ -134,8 +134,46 @@ void main() {
 
     await tester.tap(find.text('👍'));
     await tester.pump();
-    expect(tapped, 'tapped');
+    expect(tapped, '👍');
   });
+
+  testWidgets(
+    'multiple reaction types overlap as a cluster and stay individually '
+    'tappable',
+    (tester) async {
+      final event = message(eventId: r'$message');
+      final timeline = Timeline(
+        room: room,
+        chunk: TimelineChunk(events: [event]),
+      );
+      timeline.addAggregatedEvent(
+        reaction(eventId: r'$r1', relatesToEventId: event.eventId, emoji: '👍'),
+      );
+      timeline.addAggregatedEvent(
+        reaction(
+          eventId: r'$r2',
+          relatesToEventId: event.eventId,
+          emoji: '❤️',
+          senderId: '@bob:matrix.example.test',
+        ),
+      );
+
+      String? tapped;
+      await tester.pumpWidget(
+        pump(event, timeline, onReaction: (emoji) => tapped = emoji),
+      );
+
+      // No per-emoji counts in the overlapped view, just one combined total.
+      expect(find.text('1'), findsNothing);
+      expect(find.text('2'), findsOneWidget);
+      expect(find.text('👍'), findsOneWidget);
+      expect(find.text('❤️'), findsOneWidget);
+
+      await tester.tap(find.text('❤️'));
+      await tester.pump();
+      expect(tapped, '❤️');
+    },
+  );
 
   testWidgets('hover reveals the quick-action toolbar, exit hides it', (
     tester,

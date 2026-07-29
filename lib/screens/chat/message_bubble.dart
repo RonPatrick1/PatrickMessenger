@@ -278,7 +278,7 @@ class _MessageBubbleState extends State<MessageBubble> {
     // layout, so it's always within bounds.
     final toolbar = showToolbar
         ? Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 2),
             child: _HoverQuickActions(
               onReaction: onReaction,
               onReply: onReply,
@@ -406,6 +406,9 @@ class _ReplyPreviewState extends State<_ReplyPreview> {
 }
 
 class _ReactionBadges extends StatelessWidget {
+  static const _circleSize = 22.0;
+  static const _overlapStep = 14.0;
+
   final List<ReactionGroup> groups;
   final ValueChanged<String> onReaction;
 
@@ -414,31 +417,90 @@ class _ReactionBadges extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    return Wrap(
-      spacing: 3,
-      children: [
-        for (final group in groups)
-          Material(
-            color: group.reactedByMe
-                ? colors.primaryContainer
-                : colors.surfaceContainerHigh,
-            shape: StadiumBorder(
-              side: BorderSide(color: colors.surface, width: 1.5),
-            ),
-            elevation: 1,
-            child: InkWell(
-              customBorder: const StadiumBorder(),
-              onTap: () => onReaction(group.emoji),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 6,
-                  vertical: 2,
-                ),
-                child: ReactionLabel(emoji: group.emoji, count: group.count),
-              ),
+
+    // A single reaction type still reads better as a plain emoji + count
+    // pill — there's nothing to overlap yet.
+    if (groups.length == 1) {
+      final group = groups.single;
+      return _badgePill(
+        colors: colors,
+        reactedByMe: group.reactedByMe,
+        onTap: () => onReaction(group.emoji),
+        child: ReactionLabel(emoji: group.emoji, count: group.count),
+      );
+    }
+
+    // Multiple reaction types: a Facebook-style cluster of overlapping
+    // circles (one per emoji, most recent on top) followed by the combined
+    // total. Each circle sits at a real, non-overflowing Positioned offset
+    // within a Stack whose own width is sized to fit them all, so — unlike
+    // an earlier attempt at overlap via Positioned + Clip.none overflow —
+    // every circle stays genuinely within hit-testable bounds and remains
+    // individually tappable.
+    final totalCount = groups.fold<int>(0, (sum, group) => sum + group.count);
+    final clusterWidth = _circleSize + (groups.length - 1) * _overlapStep;
+
+    return _badgePill(
+      colors: colors,
+      reactedByMe: groups.any((group) => group.reactedByMe),
+      onTap: null,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: clusterWidth,
+            height: _circleSize,
+            child: Stack(
+              children: [
+                for (final (index, group) in groups.indexed)
+                  Positioned(
+                    left: index * _overlapStep,
+                    width: _circleSize,
+                    height: _circleSize,
+                    child: Material(
+                      shape: CircleBorder(
+                        side: BorderSide(color: colors.surface, width: 1.5),
+                      ),
+                      color: group.reactedByMe
+                          ? colors.primaryContainer
+                          : colors.surfaceContainerHigh,
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: () => onReaction(group.emoji),
+                        child: Center(
+                          child: EmojiGlyph(group.emoji, size: 13),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
-      ],
+          const SizedBox(width: 4),
+          Text('$totalCount'),
+        ],
+      ),
+    );
+  }
+
+  Widget _badgePill({
+    required ColorScheme colors,
+    required bool reactedByMe,
+    required VoidCallback? onTap,
+    required Widget child,
+  }) {
+    return Material(
+      color: reactedByMe ? colors.primaryContainer : colors.surfaceContainerHigh,
+      shape: StadiumBorder(side: BorderSide(color: colors.surface, width: 1.5)),
+      elevation: 1,
+      child: InkWell(
+        customBorder: const StadiumBorder(),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          child: child,
+        ),
+      ),
     );
   }
 }
@@ -456,11 +518,8 @@ class _HoverQuickActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
     return Material(
-      color: colors.surfaceContainerHighest,
-      elevation: 3,
-      borderRadius: BorderRadius.circular(20),
+      color: Colors.transparent,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
         child: Wrap(
