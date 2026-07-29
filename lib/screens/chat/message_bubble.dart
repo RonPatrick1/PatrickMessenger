@@ -1,5 +1,12 @@
+import 'dart:io';
+
+import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart';
+import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart' as sharing;
 
 import '../../archive/archive_contract.dart';
 import '../../archive/archive_repository.dart';
@@ -368,19 +375,8 @@ class _MessageContent extends StatelessWidget {
     return switch (event.messageType) {
       MessageTypes.Image ||
       MessageTypes.Sticker => _EncryptedImage(event: event),
-      MessageTypes.File => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.insert_drive_file_outlined),
-          const SizedBox(width: 8),
-          Flexible(
-            child: ColorEmojiText(
-              event.body,
-              style: TextStyle(color: textColor),
-            ),
-          ),
-        ],
-      ),
+      MessageTypes.File || MessageTypes.Video || MessageTypes.Audio =>
+        _EncryptedAttachment(event: event, textColor: textColor),
       _ =>
         isLiamAnswer(event, liamUserId: liamUserId)
             ? _LiamAnswerContent(event: event, textColor: textColor)
@@ -396,6 +392,128 @@ class _MessageContent extends StatelessWidget {
               ),
     };
   }
+}
+
+class _EncryptedAttachment extends StatefulWidget {
+  final Event event;
+  final Color textColor;
+
+  const _EncryptedAttachment({required this.event, required this.textColor});
+
+  @override
+  State<_EncryptedAttachment> createState() => _EncryptedAttachmentState();
+}
+
+class _EncryptedAttachmentState extends State<_EncryptedAttachment> {
+  bool _opening = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = switch (widget.event.messageType) {
+      MessageTypes.Video => Icons.video_file_outlined,
+      MessageTypes.Audio => Icons.audio_file_outlined,
+      _ => Icons.insert_drive_file_outlined,
+    };
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: _opening ? null : _openAttachment,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _opening
+                ? const SizedBox.square(
+                    dimension: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(icon, color: widget.textColor),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ColorEmojiText(
+                    widget.event.body,
+                    style: TextStyle(color: widget.textColor),
+                  ),
+                  Text(
+                    _desktop ? 'Tap to save' : 'Tap to open or save',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: widget.textColor.withValues(alpha: 0.75),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openAttachment() async {
+    setState(() => _opening = true);
+    try {
+      if (_desktop) {
+        final destination = await getSaveLocation(
+          suggestedName: path.basename(widget.event.body),
+        );
+        if (destination == null) return;
+        final downloaded = await widget.event.downloadAndDecryptAttachment();
+        await File(
+          destination.path,
+        ).writeAsBytes(downloaded.bytes, flush: true);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Saved to ${destination.path}')),
+          );
+        }
+        return;
+      }
+
+      final downloaded = await widget.event.downloadAndDecryptAttachment();
+      final directory = await getTemporaryDirectory();
+      final safeName = path
+          .basename(downloaded.name)
+          .replaceAll(RegExp(r'[^A-Za-z0-9._ -]'), '_');
+      final output = File(
+        path.join(directory.path, '${widget.event.eventId.hashCode}_$safeName'),
+      );
+      await output.writeAsBytes(downloaded.bytes, flush: true);
+      if (!mounted) return;
+      final renderBox = context.findRenderObject() as RenderBox?;
+      await sharing.SharePlus.instance.share(
+        sharing.ShareParams(
+          title: downloaded.name,
+          files: [
+            sharing.XFile(
+              output.path,
+              name: downloaded.name,
+              mimeType: downloaded.mimeType,
+            ),
+          ],
+          fileNameOverrides: [downloaded.name],
+          sharePositionOrigin: renderBox == null
+              ? null
+              : renderBox.localToGlobal(Offset.zero) & renderBox.size,
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('The attachment could not be opened.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _opening = false);
+    }
+  }
+
+  bool get _desktop =>
+      defaultTargetPlatform == TargetPlatform.linux ||
+      defaultTargetPlatform == TargetPlatform.macOS ||
+      defaultTargetPlatform == TargetPlatform.windows;
 }
 
 class _LiamAnswerContent extends StatelessWidget {

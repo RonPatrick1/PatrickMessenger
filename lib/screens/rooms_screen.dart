@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart';
+import 'package:path/path.dart' as path;
+import 'package:share_receiver/share_receiver.dart';
 
 import '../config/app_config.dart';
 import '../archive/archive_repository.dart';
@@ -13,6 +15,7 @@ import '../notifications/notification_preferences.dart';
 import '../receipts/message_receipt_service.dart';
 import '../receipts/read_receipt_preferences.dart';
 import '../search/search_index_service.dart';
+import '../sharing/incoming_share_controller.dart';
 import '../settings/text_scale_preference.dart';
 import '../settings/theme_preference.dart';
 import 'chat_screen.dart';
@@ -34,6 +37,7 @@ class RoomsScreen extends StatelessWidget {
   final SearchIndexService searchIndex;
   final ReadReceiptPreferenceController readReceiptController;
   final MessageReceiptService receiptService;
+  final IncomingShareController incomingShares;
 
   const RoomsScreen({
     required this.client,
@@ -48,6 +52,7 @@ class RoomsScreen extends StatelessWidget {
     required this.searchIndex,
     required this.readReceiptController,
     required this.receiptService,
+    required this.incomingShares,
     super.key,
   });
 
@@ -125,49 +130,59 @@ class RoomsScreen extends StatelessWidget {
         icon: const Icon(Icons.edit_outlined),
         label: const Text('New message'),
       ),
-      body: Column(
+      body: Stack(
         children: [
-          HistoryRecoveryBanner(client: client),
-          Expanded(
-            child: ListenableBuilder(
-              listenable: conversationMuteController,
-              builder: (context, _) => StreamBuilder<SyncUpdate>(
-                stream: client.onSync.stream,
-                builder: (context, _) {
-                  RoomRenamePermissionUpgrader.schedule(client);
-                  final rooms = client.rooms
-                      .where(
-                        (room) =>
-                            room.membership == Membership.join ||
-                            room.membership == Membership.invite,
-                      )
-                      .toList();
+          Column(
+            children: [
+              HistoryRecoveryBanner(client: client),
+              Expanded(
+                child: ListenableBuilder(
+                  listenable: conversationMuteController,
+                  builder: (context, _) => StreamBuilder<SyncUpdate>(
+                    stream: client.onSync.stream,
+                    builder: (context, _) {
+                      RoomRenamePermissionUpgrader.schedule(client);
+                      final rooms = client.rooms
+                          .where(
+                            (room) =>
+                                room.membership == Membership.join ||
+                                room.membership == Membership.invite,
+                          )
+                          .toList();
 
-                  if (rooms.isEmpty) {
-                    return _EmptyRooms(
-                      onStart: () => _startConversation(context),
-                    );
-                  }
+                      if (rooms.isEmpty) {
+                        return _EmptyRooms(
+                          onStart: () => _startConversation(context),
+                        );
+                      }
 
-                  return ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 100),
-                    itemCount: rooms.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 4),
-                    itemBuilder: (context, index) {
-                      final room = rooms[index];
-                      return _RoomTile(
-                        room: room,
-                        muted: conversationMuteController.isMuted(room.id),
-                        onTap: () => _openRoom(context, room),
-                        onToggleMute: () =>
-                            _toggleConversationMute(context, room),
-                        onDelete: () => _deleteConversation(context, room),
+                      return ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 100),
+                        itemCount: rooms.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 4),
+                        itemBuilder: (context, index) {
+                          final room = rooms[index];
+                          return _RoomTile(
+                            room: room,
+                            muted: conversationMuteController.isMuted(room.id),
+                            onTap: () => _openRoom(context, room),
+                            onToggleMute: () =>
+                                _toggleConversationMute(context, room),
+                            onDelete: () => _deleteConversation(context, room),
+                          );
+                        },
                       );
                     },
-                  );
-                },
+                  ),
+                ),
               ),
-            ),
+            ],
+          ),
+          _IncomingSharePrompt(
+            controller: incomingShares,
+            client: client,
+            onSelected: (room, share) =>
+                _openRoom(context, room, incomingShare: share),
           ),
         ],
       ),
@@ -178,6 +193,7 @@ class RoomsScreen extends StatelessWidget {
     BuildContext context,
     Room room, {
     MessageSearchResult? initialResult,
+    SharedData? incomingShare,
   }) async {
     if (room.membership == Membership.invite) {
       final accepted = await showDialog<bool>(
@@ -235,6 +251,7 @@ class RoomsScreen extends StatelessWidget {
           searchIndex: searchIndex,
           receiptService: receiptService,
           initialSearchResult: initialResult,
+          initialShare: incomingShare,
         ),
       ),
     );
@@ -417,6 +434,125 @@ class RoomsScreen extends StatelessWidget {
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
   }
+}
+
+class _IncomingSharePrompt extends StatefulWidget {
+  final IncomingShareController controller;
+  final Client client;
+  final Future<void> Function(Room room, SharedData share) onSelected;
+
+  const _IncomingSharePrompt({
+    required this.controller,
+    required this.client,
+    required this.onSelected,
+  });
+
+  @override
+  State<_IncomingSharePrompt> createState() => _IncomingSharePromptState();
+}
+
+class _IncomingSharePromptState extends State<_IncomingSharePrompt> {
+  bool _showing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_schedulePrompt);
+    _schedulePrompt();
+  }
+
+  @override
+  void didUpdateWidget(covariant _IncomingSharePrompt oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_schedulePrompt);
+      widget.controller.addListener(_schedulePrompt);
+    }
+    _schedulePrompt();
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_schedulePrompt);
+    super.dispose();
+  }
+
+  void _schedulePrompt() {
+    if (_showing || widget.controller.current == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _showPrompt();
+    });
+  }
+
+  Future<void> _showPrompt() async {
+    final share = widget.controller.current;
+    if (_showing || share == null) return;
+    _showing = true;
+    final rooms = widget.client.rooms
+        .where((room) => room.membership == Membership.join && room.encrypted)
+        .toList();
+    final roomId = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Share with…'),
+        content: SizedBox(
+          width: 440,
+          child: rooms.isEmpty
+              ? const Text(
+                  'Create or join an encrypted conversation before sharing.',
+                )
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_shareDescription(share)),
+                    const SizedBox(height: 12),
+                    Flexible(
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: rooms.length,
+                        itemBuilder: (context, index) {
+                          final room = rooms[index];
+                          return ListTile(
+                            leading: const Icon(Icons.lock_outline),
+                            title: Text(readableMatrixRoomName(room)),
+                            onTap: () => Navigator.pop(dialogContext, room.id),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+
+    widget.controller.consumeCurrent();
+    _showing = false;
+    final room = roomId == null ? null : widget.client.getRoomById(roomId);
+    if (room != null) await widget.onSelected(room, share);
+    _schedulePrompt();
+  }
+
+  String _shareDescription(SharedData share) {
+    if (share.filePaths.isNotEmpty) {
+      if (share.filePaths.length == 1) {
+        return 'Choose a conversation for ${path.basename(share.filePaths.first)}.';
+      }
+      return 'Choose a conversation for ${share.filePaths.length} files.';
+    }
+    return 'Choose a conversation for the shared text.';
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
 }
 
 class _RoomTile extends StatelessWidget {

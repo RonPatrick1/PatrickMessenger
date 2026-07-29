@@ -97,11 +97,13 @@ Every client uses the single public HTTPS endpoint at
 selector. Matrix account IDs use the server name
 `matrix.patrick-lamphier.com`.
 
-On desktop, Enter sends the current message and Control+Enter inserts a
-newline. A hardware keyboard connected to an iPhone or iPad—including the Mac
-keyboard driving the iOS Simulator—uses the same shortcuts. The iPhone/iPad
-on-screen Return key retains its normal multiline behavior, and the visible
-Send button sends the message.
+On desktop, Enter sends the current message and Shift+Enter or Control+Enter
+inserts a newline. A hardware keyboard connected to an Android phone/tablet,
+iPhone, or iPad—including the Mac keyboard driving the iOS Simulator—uses the
+same shortcuts. A phone or tablet's on-screen Return key retains its normal
+multiline behavior, and the visible Send button sends the message. The input
+box grows from one through five visible lines, then scrolls internally rather
+than taking over the chat window.
 
 Use the appearance button on the login or Messages screen to choose System,
 Light, or Dark. The choice is stored separately on each device.

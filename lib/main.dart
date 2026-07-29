@@ -17,6 +17,7 @@ import 'receipts/message_receipt_service.dart';
 import 'receipts/read_receipt_preferences.dart';
 import 'search/search_index_service.dart';
 import 'search/shared_search_service.dart';
+import 'sharing/incoming_share_controller.dart';
 import 'settings/text_scale_preference.dart';
 import 'settings/theme_preference.dart';
 
@@ -69,6 +70,8 @@ Future<void> _startup() async {
   await searchIndex.initialize();
   final receiptService = MessageReceiptService(client, readReceiptController);
   await receiptService.initialize();
+  final incomingShares = IncomingShareController();
+  await incomingShares.initialize();
   final notificationService = MessageNotificationService(
     client,
     notificationController,
@@ -99,6 +102,7 @@ Future<void> _startup() async {
       searchIndex: searchIndex,
       readReceiptController: readReceiptController,
       receiptService: receiptService,
+      incomingShares: incomingShares,
     ),
   );
   unawaited(androidMessageConnection.initialize());

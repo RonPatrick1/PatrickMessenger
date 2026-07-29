@@ -38,6 +38,17 @@ void main() {
       );
     });
 
+    test('Shift+Enter inserts a newline on Ubuntu desktop', () {
+      expect(
+        composerEnterAction(
+          platform: TargetPlatform.linux,
+          controlPressed: false,
+          shiftPressed: true,
+        ),
+        ComposerEnterAction.insertNewline,
+      );
+    });
+
     test('iOS hardware Enter sends and Control+Enter inserts a newline', () {
       expect(
         composerEnterAction(
@@ -52,13 +63,21 @@ void main() {
       );
     });
 
-    test('Android hardware keys retain their default behavior', () {
+    test('Android hardware Enter sends and Shift+Enter inserts a newline', () {
       expect(
         composerEnterAction(
           platform: TargetPlatform.android,
-          controlPressed: true,
+          controlPressed: false,
         ),
-        ComposerEnterAction.ignore,
+        ComposerEnterAction.send,
+      );
+      expect(
+        composerEnterAction(
+          platform: TargetPlatform.android,
+          controlPressed: false,
+          shiftPressed: true,
+        ),
+        ComposerEnterAction.insertNewline,
       );
     });
   });
@@ -120,6 +139,38 @@ void main() {
     await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+
+    expect(sends, 0);
+    expect(controller.text, 'Hello\n');
+  });
+
+  testWidgets('desktop Shift+Enter inserts a newline', (tester) async {
+    var sends = 0;
+    final controller = TextEditingController(text: 'Hello');
+    controller.selection = const TextSelection.collapsed(offset: 5);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(platform: TargetPlatform.linux),
+        home: Scaffold(
+          body: ChatComposer(
+            controller: controller,
+            sendingAttachment: false,
+            contextLabel: null,
+            contextPreview: null,
+            onCancelContext: () {},
+            onSend: () => sends++,
+            onPaste: () {},
+            onEmoji: () {},
+            onAttachment: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byType(TextField));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
 
     expect(sends, 0);
     expect(controller.text, 'Hello\n');

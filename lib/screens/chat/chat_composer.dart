@@ -11,6 +11,7 @@ enum AttachmentKind {
   rebuildSharedSearch,
   removeSharedSearch,
   picture,
+  file,
   pastePicture,
   gifSearch,
 }
@@ -39,14 +40,16 @@ TextEditingValue withLiamPrefix(TextEditingValue value) {
 ComposerEnterAction composerEnterAction({
   required TargetPlatform platform,
   required bool controlPressed,
+  bool shiftPressed = false,
 }) {
   final sendFromHardwareKeyboard =
       platform == TargetPlatform.linux ||
       platform == TargetPlatform.macOS ||
       platform == TargetPlatform.windows ||
-      platform == TargetPlatform.iOS;
+      platform == TargetPlatform.iOS ||
+      platform == TargetPlatform.android;
   if (!sendFromHardwareKeyboard) return ComposerEnterAction.ignore;
-  return controlPressed
+  return controlPressed || shiftPressed
       ? ComposerEnterAction.insertNewline
       : ComposerEnterAction.send;
 }
@@ -214,6 +217,14 @@ class ChatComposer extends StatelessWidget {
                           ),
                         ),
                         const PopupMenuItem(
+                          value: AttachmentKind.file,
+                          child: ListTile(
+                            leading: Icon(Icons.attach_file),
+                            title: Text('File or video'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        const PopupMenuItem(
                           value: AttachmentKind.pastePicture,
                           child: ListTile(
                             leading: Icon(Icons.content_paste_outlined),
@@ -307,6 +318,7 @@ class ChatComposer extends StatelessWidget {
     final action = composerEnterAction(
       platform: Theme.of(context).platform,
       controlPressed: HardwareKeyboard.instance.isControlPressed,
+      shiftPressed: HardwareKeyboard.instance.isShiftPressed,
     );
     switch (action) {
       case ComposerEnterAction.ignore:

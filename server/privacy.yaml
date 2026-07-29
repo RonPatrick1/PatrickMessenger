@@ -53,4 +53,4 @@ push:
   include_content: false
   jitter_delay: 10s
 
-max_upload_size: 50M
+max_upload_size: 100M

@@ -10,6 +10,7 @@ import 'notifications/notification_preferences.dart';
 import 'receipts/message_receipt_service.dart';
 import 'receipts/read_receipt_preferences.dart';
 import 'search/search_index_service.dart';
+import 'sharing/incoming_share_controller.dart';
 import 'screens/login_screen.dart';
 import 'screens/rooms_screen.dart';
 import 'settings/text_scale_preference.dart';
@@ -28,6 +29,7 @@ class PatrickMessengerApp extends StatelessWidget {
   final SearchIndexService searchIndex;
   final ReadReceiptPreferenceController readReceiptController;
   final MessageReceiptService receiptService;
+  final IncomingShareController incomingShares;
 
   const PatrickMessengerApp({
     required this.client,
@@ -42,6 +44,7 @@ class PatrickMessengerApp extends StatelessWidget {
     required this.searchIndex,
     required this.readReceiptController,
     required this.receiptService,
+    required this.incomingShares,
     super.key,
   });
 
@@ -88,6 +91,7 @@ class PatrickMessengerApp extends StatelessWidget {
                       searchIndex: searchIndex,
                       readReceiptController: readReceiptController,
                       receiptService: receiptService,
+                      incomingShares: incomingShares,
                     )
                   : LoginScreen(
                       client: client,

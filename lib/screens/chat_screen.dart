@@ -13,6 +13,7 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:share_plus/share_plus.dart' as sharing;
+import 'package:share_receiver/share_receiver.dart';
 
 import '../archive/archive_contract.dart';
 import '../archive/archive_models.dart';
@@ -50,6 +51,7 @@ class ChatScreen extends StatefulWidget {
   final SearchIndexService searchIndex;
   final MessageReceiptService receiptService;
   final MessageSearchResult? initialSearchResult;
+  final SharedData? initialShare;
 
   const ChatScreen({
     required this.room,
@@ -61,6 +63,7 @@ class ChatScreen extends StatefulWidget {
     required this.searchIndex,
     required this.receiptService,
     this.initialSearchResult,
+    this.initialShare,
     super.key,
   });
 
@@ -72,6 +75,9 @@ class _ChatScreenState extends State<ChatScreen> {
   static const _initialMatrixMessageCount = 50;
   static const _initialArchiveMessageCount = 200;
   static const _archiveHistoryPageSize = 200;
+  static const _maximumAttachmentMegabytes = 99;
+  static const _maximumAttachmentBytes =
+      _maximumAttachmentMegabytes * 1024 * 1024;
 
   final TextEditingController _messageController =
       ColorEmojiTextEditingController(emojiTextStyle: emojiGlyphStyle());
@@ -128,6 +134,11 @@ class _ChatScreenState extends State<ChatScreen> {
     widget.liamChatterVisibility.addListener(_handlePreferencesChanged);
     widget.archive.addListener(_handleArchiveChanged);
     _archiveMessages = widget.archive.messages;
+    if (widget.initialShare != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_prepareIncomingShare(widget.initialShare!));
+      });
+    }
     unawaited(
       widget.archive.loadRecent().then((_) {
         if (!mounted) return;
@@ -695,6 +706,8 @@ class _ChatScreenState extends State<ChatScreen> {
         await _removeSharedSearch();
       case AttachmentKind.picture:
         await _sendPicture();
+      case AttachmentKind.file:
+        await _sendFile();
       case AttachmentKind.pastePicture:
         await _pasteFromClipboard();
       case AttachmentKind.gifSearch:
@@ -895,6 +908,125 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (_) {
       if (mounted) _showError('The selected picture could not be read.');
     }
+  }
+
+  Future<void> _sendFile() async {
+    if (_sendingAttachment) return;
+    final selectedFile = await openFile();
+    if (selectedFile == null) return;
+
+    try {
+      final length = await selectedFile.length();
+      if (length > _maximumAttachmentBytes) {
+        _showError(
+          'Choose a file smaller than $_maximumAttachmentMegabytes MB.',
+        );
+        return;
+      }
+      setState(() => _sendingAttachment = true);
+      await _sendFileBytes(
+        bytes: await selectedFile.readAsBytes(),
+        name: selectedFile.name,
+        mimeType: selectedFile.mimeType,
+      );
+      if (mounted) _cancelComposerContext();
+    } catch (_) {
+      if (mounted) _showError('The selected file could not be sent.');
+    } finally {
+      if (mounted) setState(() => _sendingAttachment = false);
+    }
+  }
+
+  Future<void> _prepareIncomingShare(SharedData share) async {
+    final text = share.text?.trim();
+    if (text != null && text.isNotEmpty) {
+      _insertComposerText(text);
+      _messageFocusNode.requestFocus();
+    }
+    if (share.filePaths.isEmpty || !mounted) return;
+
+    final names = share.filePaths.map(path.basename).toList();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        icon: const Icon(Icons.attach_file),
+        title: Text(
+          names.length == 1 ? 'Send shared file?' : 'Send shared files?',
+        ),
+        content: Text(
+          names.length == 1
+              ? 'Send ${names.first} to ${readableMatrixRoomName(widget.room)}?'
+              : 'Send ${names.length} files to '
+                    '${readableMatrixRoomName(widget.room)}?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Send'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _sendingAttachment = true);
+    var sent = 0;
+    var skipped = 0;
+    try {
+      for (final filePath in share.filePaths) {
+        final file = File(filePath);
+        final length = await file.length();
+        if (length > _maximumAttachmentBytes) {
+          skipped++;
+          continue;
+        }
+        await _sendFileBytes(
+          bytes: await file.readAsBytes(),
+          name: path.basename(filePath),
+          mimeType: share.filePaths.length == 1 ? share.mimeType : null,
+        );
+        sent++;
+      }
+      if (mounted && skipped > 0) {
+        _showError(
+          sent == 0
+              ? 'The shared file is larger than '
+                    '$_maximumAttachmentMegabytes MB.'
+              : '$skipped file(s) larger than '
+                    '$_maximumAttachmentMegabytes MB were not sent.',
+        );
+      }
+    } catch (_) {
+      if (mounted) _showError('The shared file could not be sent.');
+    } finally {
+      if (mounted) setState(() => _sendingAttachment = false);
+    }
+  }
+
+  Future<void> _sendFileBytes({
+    required Uint8List bytes,
+    required String name,
+    String? mimeType,
+  }) async {
+    final file = MatrixFile.fromMimeType(
+      bytes: bytes,
+      name: name,
+      mimeType: mimeType,
+    );
+    await widget.room.sendFileEvent(
+      file,
+      inReplyTo: _replyTo,
+      shrinkImageMaxDimension:
+          file is MatrixImageFile && !isAnimatedGifName(name) ? 1600 : null,
+      extraContent: {
+        messageRecipientsKey: _receiptRecipients(),
+        archiveReplyKey: ?_archiveReplyTo?.id,
+      },
+    );
   }
 
   Future<void> _takePicture() async {
