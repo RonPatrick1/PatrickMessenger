@@ -6,9 +6,12 @@ use matrix_sdk::{
     attachment::AttachmentConfig,
     config::SyncSettings,
     event_handler::Ctx,
-    ruma::events::room::{
-        member::StrippedRoomMemberEvent,
-        message::{MessageType, OriginalSyncRoomMessageEvent, TextMessageEventContent},
+    ruma::{
+        OwnedRoomId,
+        events::room::{
+            member::StrippedRoomMemberEvent,
+            message::{MessageType, OriginalSyncRoomMessageEvent, TextMessageEventContent},
+        },
     },
 };
 use reqwest::Client as HttpClient;
@@ -69,6 +72,26 @@ struct BridgeResponse {
     error: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct RoutineDelivery {
+    id: i64,
+    room_id: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct RoutineClaimResponse {
+    delivery: Option<RoutineDelivery>,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RoutineAckRequest {
+    id: i64,
+    delivered: bool,
+    error: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -102,16 +125,115 @@ async fn main() -> Result<()> {
             .timeout(Duration::from_secs(600))
             .build()?,
     });
-    client.add_event_handler_context(bot);
+    client.add_event_handler_context(bot.clone());
     client.add_event_handler(on_invite);
 
     let response = client.sync_once(SyncSettings::default()).await?;
     client.add_event_handler(on_room_message);
 
+    let routine_client = client.clone();
+    let routine_bot = bot.clone();
+    tokio::spawn(async move {
+        poll_routine_deliveries(routine_client, routine_bot).await;
+    });
+
     info!(user = %client.user_id().expect("logged-in user"), "Liam is ready");
     client
         .sync(SyncSettings::default().token(response.next_batch))
         .await?;
+    Ok(())
+}
+
+fn bridge_endpoint(config: &Config, path: &str) -> String {
+    let base = config
+        .liam_bridge_url
+        .strip_suffix("/chat")
+        .unwrap_or(&config.liam_bridge_url);
+    format!("{base}{path}")
+}
+
+async fn poll_routine_deliveries(client: Client, bot: Arc<Bot>) {
+    loop {
+        let delay = match claim_and_deliver_routine(&client, &bot).await {
+            Ok(()) => Duration::from_secs(5),
+            Err(error) => {
+                warn!(%error, "scheduled Liam delivery failed; retrying");
+                Duration::from_secs(10)
+            }
+        };
+        sleep(delay).await;
+    }
+}
+
+async fn claim_and_deliver_routine(client: &Client, bot: &Bot) -> Result<()> {
+    let response = bot
+        .http
+        .post(bridge_endpoint(&bot.config, "/routine-deliveries/claim"))
+        .json(&json!({}))
+        .send()
+        .await?;
+    let status = response.status();
+    let body: RoutineClaimResponse = response
+        .json()
+        .await
+        .context("parsing scheduled Liam delivery claim")?;
+    if let Some(error) = body.error.filter(|value| !value.is_empty()) {
+        bail!("Liam bridge delivery claim failed: {error}");
+    }
+    if !status.is_success() {
+        bail!("Liam bridge delivery claim returned HTTP {status}");
+    }
+    let Some(delivery) = body.delivery else {
+        return Ok(());
+    };
+
+    let outcome = deliver_routine(client, bot, &delivery).await;
+    let error_text = outcome.as_ref().err().map(|error| format!("{error:#}"));
+    acknowledge_routine_delivery(
+        bot,
+        RoutineAckRequest {
+            id: delivery.id,
+            delivered: outcome.is_ok(),
+            error: error_text,
+        },
+    )
+    .await?;
+    outcome
+}
+
+async fn deliver_routine(client: &Client, bot: &Bot, delivery: &RoutineDelivery) -> Result<()> {
+    let room_id: OwnedRoomId = delivery
+        .room_id
+        .parse()
+        .with_context(|| format!("invalid routine Matrix room id {}", delivery.room_id))?;
+    let room = client
+        .get_room(&room_id)
+        .with_context(|| format!("Liam is not in routine room {room_id}"))?;
+    if room.state() != RoomState::Joined {
+        bail!("Liam is not joined to routine room {room_id}");
+    }
+    if !room
+        .latest_encryption_state()
+        .await
+        .is_ok_and(|state| state.is_encrypted())
+    {
+        bail!("routine room {room_id} is not encrypted");
+    }
+    send_liam_answer(&room, &normalize_answer(&delivery.content), &bot.http).await?;
+    info!(delivery = delivery.id, room = %room_id, "sent scheduled Liam result");
+    Ok(())
+}
+
+async fn acknowledge_routine_delivery(bot: &Bot, ack: RoutineAckRequest) -> Result<()> {
+    let response = bot
+        .http
+        .post(bridge_endpoint(&bot.config, "/routine-deliveries/ack"))
+        .json(&ack)
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        bail!("Liam bridge delivery acknowledgement returned HTTP {}", response.status());
+    }
     Ok(())
 }
 
