@@ -302,6 +302,37 @@ void main() {
     },
   );
 
+  testWidgets(
+    'a video message with no thumbnail info renders a generic '
+    'placeholder (never decodes the raw video as an image)',
+    (tester) async {
+      final event = Event(
+        room: room,
+        eventId: r'$video',
+        senderId: '@alice:matrix.example.test',
+        originServerTs: DateTime(2026, 7, 29, 9, 0),
+        type: EventTypes.Message,
+        content: {
+          'msgtype': MessageTypes.Video,
+          'body': 'clip.mp4',
+          'url': 'mxc://matrix.example.test/abc123',
+        },
+        status: EventStatus.synced,
+      );
+      final timeline = Timeline(
+        room: room,
+        chunk: TimelineChunk(events: [event]),
+      );
+
+      await tester.pumpWidget(pump(event, timeline));
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.videocam), findsOneWidget);
+      expect(find.byIcon(Icons.play_circle_fill), findsOneWidget);
+    },
+  );
+
   testWidgets('hover toolbar stays hidden in selection mode', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
 

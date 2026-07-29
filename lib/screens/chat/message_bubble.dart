@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart' as sharing;
@@ -12,6 +15,8 @@ import '../../archive/archive_contract.dart';
 import '../../archive/archive_repository.dart';
 import '../../matrix/display_names.dart';
 import '../../receipts/message_receipt_service.dart';
+import '../../services/offset_aes_ctr.dart';
+import '../../services/streaming_encrypted_video_playback.dart';
 import 'emoji_picker_dialog.dart';
 import 'emoji_style.dart';
 import 'liam_icon.dart';
@@ -644,7 +649,8 @@ class _MessageContent extends StatelessWidget {
     return switch (event.messageType) {
       MessageTypes.Image ||
       MessageTypes.Sticker => _EncryptedImage(event: event),
-      MessageTypes.File || MessageTypes.Video || MessageTypes.Audio =>
+      MessageTypes.Video => _EncryptedVideo(event: event),
+      MessageTypes.File || MessageTypes.Audio =>
         _EncryptedAttachment(event: event, textColor: textColor),
       _ =>
         isLiamAnswer(event, liamUserId: liamUserId)
@@ -946,6 +952,243 @@ class _FullImageDialogState extends State<_FullImageDialog> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _EncryptedVideo extends StatefulWidget {
+  final Event event;
+
+  const _EncryptedVideo({required this.event});
+
+  @override
+  State<_EncryptedVideo> createState() => _EncryptedVideoState();
+}
+
+class _EncryptedVideoState extends State<_EncryptedVideo> {
+  // Synapse (and homeservers generally) can only generate thumbnails for
+  // image content, never for video. `downloadAndDecryptAttachment` silently
+  // downgrades `getThumbnail: true` to the full attachment when the event
+  // has no separate `info.thumbnail_url`/`thumbnail_file` — which is every
+  // video this app sends, since none of the send paths attach one. Without
+  // this `hasThumbnail` gate, that fallback would hand the raw video bytes
+  // to `Image.memory`, which fails to decode them as an image.
+  late final Future<MatrixFile>? _thumbnail = widget.event.hasThumbnail
+      ? widget.event.downloadAndDecryptAttachment(getThumbnail: true)
+      : null;
+
+  bool _loadingFull = false;
+  Player? _player;
+  VideoController? _controller;
+  EncryptedVideoStreamSession? _session;
+  StreamSubscription<String>? _sessionEvents;
+
+  @override
+  void dispose() {
+    _sessionEvents?.cancel();
+    _session?.dispose();
+    _player?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _startPlayback() async {
+    setState(() => _loadingFull = true);
+    try {
+      final event = widget.event;
+      final fileMap = event.content.tryGetMap<String, Object?>('file');
+      final mxcUrl = event.attachmentMxcUrl;
+      final totalLength = event.infoMap.tryGet<int>('size');
+      if (fileMap == null || mxcUrl == null || totalLength == null) {
+        throw StateError('This video has no playable attachment.');
+      }
+      final key = decodeUnpaddedBase64(
+        fileMap.tryGetMap<String, Object?>('key')?.tryGet<String>('k') ?? '',
+      );
+      final iv = decodeUnpaddedBase64(fileMap.tryGet<String>('iv') ?? '');
+      final expectedSha256 = fileMap
+          .tryGetMap<String, Object?>('hashes')
+          ?.tryGet<String>('sha256');
+      final mimeType = event.infoMap.tryGet<String>('mimetype') ?? 'video/mp4';
+
+      final client = event.room.client;
+      final accessToken = client.accessToken;
+      if (accessToken == null) throw StateError('Not connected.');
+      final downloadUri = await mxcUrl.getDownloadUri(client);
+
+      final session = await EncryptedVideoStreamSession.start(
+        downloadUri: downloadUri,
+        accessToken: accessToken,
+        key: key,
+        iv: iv,
+        totalLength: totalLength,
+        expectedSha256: expectedSha256,
+        mimeType: mimeType,
+      );
+      final sessionEvents = session.events.listen((message) {
+        if (message == 'integrity-failure' && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('This video failed an integrity check.'),
+            ),
+          );
+          _stop();
+        }
+      });
+
+      final player = Player();
+      final controller = VideoController(player);
+      await player.open(Media('http://127.0.0.1:${session.port}/video'));
+      if (!mounted) {
+        sessionEvents.cancel();
+        session.dispose();
+        player.dispose();
+        return;
+      }
+      setState(() {
+        _session = session;
+        _sessionEvents = sessionEvents;
+        _player = player;
+        _controller = controller;
+        _loadingFull = false;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => _loadingFull = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('The video could not be played.')),
+        );
+      }
+    }
+  }
+
+  void _stop() {
+    _sessionEvents?.cancel();
+    _session?.dispose();
+    _player?.dispose();
+    setState(() {
+      _sessionEvents = null;
+      _session = null;
+      _player = null;
+      _controller = null;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_controller != null) {
+      return SizedBox(
+        width: 280,
+        height: 210,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Video(controller: _controller!),
+              ),
+            ),
+            Positioned(
+              top: 4,
+              right: 4,
+              child: _ScrimIconButton(
+                icon: Icons.close,
+                tooltip: 'Stop',
+                onPressed: _stop,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final thumbnailFuture = _thumbnail;
+    if (thumbnailFuture == null) {
+      return _idle(null);
+    }
+    return FutureBuilder<MatrixFile>(
+      future: thumbnailFuture,
+      builder: (context, snapshot) => _idle(snapshot.data),
+    );
+  }
+
+  // Renders either a decoded thumbnail image or, if the event has none (the
+  // common case for videos), a generic placeholder — either way it's the
+  // same tappable "play" surface. A thumbnail load failure falls back to the
+  // placeholder rather than an error: the video itself is still perfectly
+  // playable even when its preview image couldn't be fetched.
+  Widget _idle(MatrixFile? thumbnail) {
+    return Semantics(
+      button: true,
+      label: 'Play encrypted video',
+      child: GestureDetector(
+        onTap: _loadingFull ? null : _startPlayback,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox(
+            width: 280,
+            height: 210,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (thumbnail != null)
+                  Image.memory(
+                    thumbnail.bytes,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  )
+                else
+                  const ColoredBox(
+                    color: Colors.black87,
+                    child: Icon(
+                      Icons.videocam,
+                      color: Colors.white54,
+                      size: 48,
+                    ),
+                  ),
+                Container(color: Colors.black.withValues(alpha: 0.25)),
+                Center(
+                  child: _loadingFull
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Icon(
+                          Icons.play_circle_fill,
+                          color: Colors.white,
+                          size: 56,
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ScrimIconButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  const _ScrimIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.45),
+      shape: const CircleBorder(),
+      child: IconButton(
+        constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+        padding: EdgeInsets.zero,
+        iconSize: 18,
+        color: Colors.white,
+        icon: Icon(icon),
+        tooltip: tooltip,
+        onPressed: onPressed,
       ),
     );
   }

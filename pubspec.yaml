@@ -58,6 +58,9 @@ dependencies:
   crypto: ^3.0.7
   pointycastle: ^4.0.0
   vodozemac: ^0.5.0
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  media_kit_libs_video: ^1.0.7
 
 dev_dependencies:
   flutter_test:

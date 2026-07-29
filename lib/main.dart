@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:media_kit/media_kit.dart';
 
 import 'app.dart';
 import 'archive/archive_repository.dart';
@@ -23,6 +24,7 @@ import 'settings/theme_preference.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  MediaKit.ensureInitialized();
   AndroidMessageConnectionService.initializeCommunicationPort();
   await _start();
 }
