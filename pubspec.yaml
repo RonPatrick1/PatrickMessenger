@@ -56,6 +56,7 @@ dependencies:
   share_receiver: ^1.0.2
   args: ^2.7.0
   crypto: ^3.0.7
+  pointycastle: ^4.0.0
   vodozemac: ^0.5.0
 
 dev_dependencies:

@@ -28,6 +28,7 @@ import '../search/search_index_service.dart';
 import '../search/shared_search_service.dart';
 import '../services/chat_clipboard.dart';
 import '../services/giphy_client.dart';
+import '../services/streaming_encrypted_media_upload.dart';
 import '../settings/text_scale_preference.dart';
 import 'chat/chat_composer.dart';
 import 'chat/archive_message_bubble.dart';
@@ -78,6 +79,7 @@ class _ChatScreenState extends State<ChatScreen> {
   static const _maximumAttachmentMegabytes = 99;
   static const _maximumAttachmentBytes =
       _maximumAttachmentMegabytes * 1024 * 1024;
+  static const _streamingAttachmentThresholdBytes = 20 * 1024 * 1024;
 
   final TextEditingController _messageController =
       ColorEmojiTextEditingController(emojiTextStyle: emojiGlyphStyle());
@@ -924,8 +926,8 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       }
       setState(() => _sendingAttachment = true);
-      await _sendFileBytes(
-        bytes: await selectedFile.readAsBytes(),
+      await _sendFilePath(
+        filePath: selectedFile.path,
         name: selectedFile.name,
         mimeType: selectedFile.mimeType,
       );
@@ -984,8 +986,8 @@ class _ChatScreenState extends State<ChatScreen> {
           skipped++;
           continue;
         }
-        await _sendFileBytes(
-          bytes: await file.readAsBytes(),
+        await _sendFilePath(
+          filePath: filePath,
           name: path.basename(filePath),
           mimeType: share.filePaths.length == 1 ? share.mimeType : null,
         );
@@ -1012,6 +1014,14 @@ class _ChatScreenState extends State<ChatScreen> {
     required String name,
     String? mimeType,
   }) async {
+    // Matrix caches the homeserver's media limit for three days. Refresh it
+    // before an attachment upload so a recently increased server limit takes
+    // effect immediately instead of rejecting an otherwise valid file using
+    // stale client-side configuration.
+    await widget.room.client.getConfig(
+      cacheLifetime: Duration.zero,
+      throwOnUpdateFailure: true,
+    );
     final file = MatrixFile.fromMimeType(
       bytes: bytes,
       name: name,
@@ -1022,6 +1032,38 @@ class _ChatScreenState extends State<ChatScreen> {
       inReplyTo: _replyTo,
       shrinkImageMaxDimension:
           file is MatrixImageFile && !isAnimatedGifName(name) ? 1600 : null,
+      extraContent: {
+        messageRecipientsKey: _receiptRecipients(),
+        archiveReplyKey: ?_archiveReplyTo?.id,
+      },
+    );
+  }
+
+  Future<void> _sendFilePath({
+    required String filePath,
+    required String name,
+    String? mimeType,
+  }) async {
+    final file = File(filePath);
+    final length = await file.length();
+    final resolvedMimeType = mimeType?.isNotEmpty == true
+        ? mimeType!
+        : MatrixFile(bytes: Uint8List(0), name: name).mimeType;
+    if (length < _streamingAttachmentThresholdBytes) {
+      await _sendFileBytes(
+        bytes: await file.readAsBytes(),
+        name: name,
+        mimeType: resolvedMimeType,
+      );
+      return;
+    }
+
+    await StreamingEncryptedMediaUpload.send(
+      room: widget.room,
+      source: file,
+      name: name,
+      mimeType: resolvedMimeType,
+      inReplyTo: _replyTo,
       extraContent: {
         messageRecipientsKey: _receiptRecipients(),
         archiveReplyKey: ?_archiveReplyTo?.id,
