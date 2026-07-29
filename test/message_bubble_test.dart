@@ -175,6 +175,61 @@ void main() {
     },
   );
 
+  testWidgets(
+    'tapping the cluster total explodes it into a popup with every '
+    'reaction individually clickable',
+    (tester) async {
+      final event = message(eventId: r'$message');
+      final timeline = Timeline(
+        room: room,
+        chunk: TimelineChunk(events: [event]),
+      );
+      timeline.addAggregatedEvent(
+        reaction(eventId: r'$r1', relatesToEventId: event.eventId, emoji: '👍'),
+      );
+      timeline.addAggregatedEvent(
+        reaction(
+          eventId: r'$r2',
+          relatesToEventId: event.eventId,
+          emoji: '❤️',
+          senderId: '@bob:matrix.example.test',
+        ),
+      );
+      timeline.addAggregatedEvent(
+        reaction(
+          eventId: r'$r3',
+          relatesToEventId: event.eventId,
+          emoji: '😂',
+          senderId: '@carol:matrix.example.test',
+        ),
+      );
+
+      String? tapped;
+      await tester.pumpWidget(
+        pump(event, timeline, onReaction: (emoji) => tapped = emoji),
+      );
+
+      // Tap the total count (not a specific circle) to explode the cluster.
+      await tester.tap(find.text('3'));
+      await tester.pumpAndSettle();
+
+      // Every reaction now has its own fully visible, separately tappable
+      // pill in the popup (in addition to the still-present collapsed
+      // circles underneath).
+      expect(find.text('👍'), findsNWidgets(2));
+      expect(find.text('❤️'), findsNWidgets(2));
+      expect(find.text('😂'), findsNWidgets(2));
+
+      await tester.tap(find.text('😂').last);
+      await tester.pumpAndSettle();
+
+      expect(tapped, '😂');
+      // The popup closes itself after a selection (showMenu's default
+      // behavior), leaving only the collapsed cluster's own circle.
+      expect(find.text('😂'), findsOneWidget);
+    },
+  );
+
   testWidgets('hover reveals the quick-action toolbar, exit hides it', (
     tester,
   ) async {

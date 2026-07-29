@@ -447,47 +447,99 @@ class _ReactionBadges extends StatelessWidget {
     final totalCount = groups.fold<int>(0, (sum, group) => sum + group.count);
     final clusterWidth = _circleSize + (groups.length - 1) * _overlapStep;
 
-    return _badgePill(
-      colors: colors,
-      reactedByMe: groups.any((group) => group.reactedByMe),
-      onTap: null,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: clusterWidth,
-            height: _circleSize,
-            child: Stack(
-              children: [
-                for (final (index, group) in groups.indexed)
-                  Positioned(
-                    left: index * _overlapStep,
-                    width: _circleSize,
-                    height: _circleSize,
-                    child: Material(
-                      shape: CircleBorder(
-                        side: BorderSide(color: colors.surface, width: 1.5),
-                      ),
-                      color: group.reactedByMe
-                          ? colors.primaryContainer
-                          : colors.surfaceContainerHigh,
-                      child: InkWell(
-                        customBorder: const CircleBorder(),
-                        onTap: () => onReaction(group.emoji),
-                        child: Center(
-                          child: EmojiGlyph(group.emoji, size: 13),
+    return Builder(
+      builder: (context) => _badgePill(
+        colors: colors,
+        reactedByMe: groups.any((group) => group.reactedByMe),
+        // Individual circles remain directly tappable wherever they're
+        // actually visible (below); this handles taps that land on the
+        // pill itself — the total count, or gaps between circles — by
+        // "exploding" the whole cluster into a popup where every reaction
+        // is fully visible and clickable, including ones mostly hidden
+        // behind later circles.
+        onTap: () => _showExplodedPopup(context, colors),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: clusterWidth,
+              height: _circleSize,
+              child: Stack(
+                children: [
+                  for (final (index, group) in groups.indexed)
+                    Positioned(
+                      left: index * _overlapStep,
+                      width: _circleSize,
+                      height: _circleSize,
+                      child: Material(
+                        shape: CircleBorder(
+                          side: BorderSide(color: colors.surface, width: 1.5),
+                        ),
+                        color: group.reactedByMe
+                            ? colors.primaryContainer
+                            : colors.surfaceContainerHigh,
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: () => onReaction(group.emoji),
+                          child: Center(
+                            child: EmojiGlyph(group.emoji, size: 13),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 4),
-          Text('$totalCount'),
-        ],
+            const SizedBox(width: 4),
+            Text('$totalCount'),
+          ],
+        ),
       ),
     );
+  }
+
+  Future<void> _showExplodedPopup(BuildContext context, ColorScheme colors) async {
+    final button = context.findRenderObject()! as RenderBox;
+    final overlay = Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset.zero, ancestor: overlay),
+        button.localToGlobal(
+          button.size.bottomRight(Offset.zero),
+          ancestor: overlay,
+        ),
+      ),
+      Offset.zero & overlay.size,
+    );
+
+    final selected = await showMenu<String>(
+      context: context,
+      position: position,
+      color: Colors.transparent,
+      elevation: 0,
+      shadowColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      items: [
+        PopupMenuItem<String>(
+          enabled: false,
+          padding: EdgeInsets.zero,
+          child: Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            children: [
+              for (final group in groups)
+                _badgePill(
+                  colors: colors,
+                  reactedByMe: group.reactedByMe,
+                  onTap: () => Navigator.of(context).pop(group.emoji),
+                  child: ReactionLabel(emoji: group.emoji, count: group.count),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+    if (selected != null) onReaction(selected);
   }
 
   Widget _badgePill({
