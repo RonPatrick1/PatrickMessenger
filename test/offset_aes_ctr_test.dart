@@ -11,9 +11,7 @@ void main() {
   final iv = Uint8List.fromList(List.generate(16, (_) => random.nextInt(256)));
   // Deliberately not a multiple of 16 so a trailing partial block is
   // exercised too.
-  final plaintext = Uint8List.fromList(
-    List.generate(5013, (i) => i % 256),
-  );
+  final plaintext = Uint8List.fromList(List.generate(5013, (i) => i % 256));
 
   late Uint8List ciphertext;
 
@@ -60,5 +58,21 @@ void main() {
       iv: iv,
     );
     expect(decrypted, equals(plaintext));
+  });
+
+  test('decrypts a range from a bounded ciphertext window', () {
+    const start = 123;
+    const end = 4097;
+    final alignedStart = start - (start % 16);
+    final window = Uint8List.sublistView(ciphertext, alignedStart, end + 1);
+    final decrypted = decryptRange(
+      ciphertext: window,
+      ciphertextOffset: alignedStart,
+      start: start,
+      end: end,
+      key: key,
+      iv: iv,
+    );
+    expect(decrypted, equals(plaintext.sublist(start, end + 1)));
   });
 }

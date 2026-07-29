@@ -26,25 +26,39 @@ Uint8List decodeUnpaddedBase64(String value) {
 /// 128-bit integer and add the block index.
 Uint8List decryptRange({
   required Uint8List ciphertext,
+  int ciphertextOffset = 0,
   required int start,
   required int end, // inclusive
   required Uint8List key,
   required Uint8List iv,
 }) {
   final alignedStart = start - (start % _blockSize);
-  final blockIndex = alignedStart ~/ _blockSize;
-  final counter = _counterForBlock(iv, blockIndex);
+  final counter = counterForAesCtrOffset(iv, alignedStart);
 
   final length = end - alignedStart + 1;
   final output = Uint8List(length);
   final cipher = SICStreamCipher(AESEngine())
     ..init(false, ParametersWithIV<KeyParameter>(KeyParameter(key), counter));
-  cipher.processBytes(ciphertext, alignedStart, length, output, 0);
+  final inputOffset = alignedStart - ciphertextOffset;
+  if (inputOffset < 0 || inputOffset + length > ciphertext.length) {
+    throw RangeError('Ciphertext does not contain the requested byte range.');
+  }
+  cipher.processBytes(ciphertext, inputOffset, length, output, 0);
 
   return Uint8List.sublistView(output, start - alignedStart);
 }
 
-Uint8List _counterForBlock(Uint8List iv, int blockIndex) {
+/// Returns the AES-CTR counter block for an encrypted-file byte offset.
+/// [byteOffset] must be aligned to the 16-byte AES block size.
+Uint8List counterForAesCtrOffset(Uint8List iv, int byteOffset) {
+  if (byteOffset < 0 || byteOffset % _blockSize != 0) {
+    throw ArgumentError.value(
+      byteOffset,
+      'byteOffset',
+      'must be 16-byte aligned',
+    );
+  }
+  final blockIndex = byteOffset ~/ _blockSize;
   if (blockIndex == 0) return iv;
   final base = BigInt.parse(
     iv.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
