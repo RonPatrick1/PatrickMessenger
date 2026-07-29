@@ -236,6 +236,57 @@ class _MessageBubbleState extends State<MessageBubble> {
       ],
     );
 
+    final bubbleColumn = Flexible(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480),
+        child: Padding(
+          padding: EdgeInsets.only(
+            top: 4,
+            bottom: 4,
+            left: mine ? 52 : 0,
+            right: mine ? 0 : 52,
+          ),
+          child: Opacity(
+            opacity: event.status.isSent ? 1 : 0.58,
+            child: Column(
+              crossAxisAlignment: mine
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
+              children: [
+                bubbleWithBadges,
+                if (groups.isNotEmpty) const SizedBox(height: 15),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // The toolbar is a normal Row sibling directly adjacent to the bubble's
+    // own (naturally-sized, Flexible) width — not an absolutely-positioned
+    // overlay. An earlier version placed it via Positioned + Clip.none
+    // overflowing a narrow Stack, which painted it in the right spot but
+    // left it outside Flutter's hit-testable bounds (RenderBox hit-testing
+    // only considers a box's own layout size before testing overflowing
+    // children), so the mouse left the real hoverable area before ever
+    // reaching it and it could never be clicked. A second attempt anchored
+    // it via Alignment inside a full-width Stack, which fixed clickability
+    // but pinned it to the far edge of the whole row instead of next to the
+    // bubble. A Row with the toolbar and the Flexible bubble as siblings
+    // sidesteps both problems: it sits directly beside the bubble's actual
+    // rendered edge (matching Signal), and it's real, non-overflowing
+    // layout, so it's always within bounds.
+    final toolbar = showToolbar
+        ? Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: _HoverQuickActions(
+              onReaction: onReaction,
+              onReply: onReply,
+              onOpenActions: onOpenActions,
+            ),
+          )
+        : null;
+
     final content = Material(
       color: selected
           ? colors.tertiaryContainer.withValues(alpha: 0.22)
@@ -244,69 +295,25 @@ class _MessageBubbleState extends State<MessageBubble> {
         onTap: selectionMode && actionsEnabled ? onSelectionTap : null,
         onLongPress: actionsEnabled ? onOpenActions : null,
         onSecondaryTap: actionsEnabled ? onOpenActions : null,
-        child: Align(
-          alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 480),
-            child: Padding(
-              padding: EdgeInsets.only(
-                top: 4,
-                bottom: 4,
-                left: mine ? 52 : 0,
-                right: mine ? 0 : 52,
-              ),
-              child: Opacity(
-                opacity: event.status.isSent ? 1 : 0.58,
-                child: Column(
-                  crossAxisAlignment: mine
-                      ? CrossAxisAlignment.end
-                      : CrossAxisAlignment.start,
-                  children: [
-                    bubbleWithBadges,
-                    if (groups.isNotEmpty) const SizedBox(height: 15),
-                  ],
-                ),
-              ),
-            ),
-          ),
+        child: Row(
+          mainAxisAlignment: mine
+              ? MainAxisAlignment.end
+              : MainAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            if (mine && toolbar != null) toolbar,
+            bubbleColumn,
+            if (!mine && toolbar != null) toolbar,
+          ],
         ),
       ),
     );
 
-    // The toolbar lives in a *separate*, genuinely full-width Stack (rather
-    // than overflowing the narrow bubble Stack above via a negative-offset
-    // Positioned) because Flutter's default hit-testing only considers a
-    // RenderBox's own layout size — content painted outside that box via
-    // Positioned + Clip.none is visible but never receives pointer/click
-    // events. That's what made the toolbar disappear the instant the mouse
-    // approached it and made it unclickable. Placing it in the open gutter
-    // beside the bubble (matching Signal's own placement) keeps it within
-    // real, hit-testable bounds.
-    final withToolbar = Stack(
-      children: [
-        SizedBox(width: double.infinity, child: content),
-        if (showToolbar)
-          Positioned.fill(
-            child: Align(
-              alignment: mine ? Alignment.centerLeft : Alignment.centerRight,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: _HoverQuickActions(
-                  onReaction: onReaction,
-                  onReply: onReply,
-                  onOpenActions: onOpenActions,
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-
-    if (!_hoverCapable) return withToolbar;
+    if (!_hoverCapable) return content;
     return MouseRegion(
       onEnter: (_) => _setHovering(true),
       onExit: (_) => _setHovering(false),
-      child: withToolbar,
+      child: content,
     );
   }
 }
