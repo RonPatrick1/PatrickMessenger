@@ -222,7 +222,7 @@ class _MessageBubbleState extends State<MessageBubble> {
       ),
     );
 
-    final stacked = Stack(
+    final bubbleWithBadges = Stack(
       clipBehavior: Clip.none,
       children: [
         bubble,
@@ -232,17 +232,6 @@ class _MessageBubbleState extends State<MessageBubble> {
             left: mine ? 6 : null,
             right: mine ? null : 6,
             child: _ReactionBadges(groups: groups, onReaction: onReaction),
-          ),
-        if (showToolbar)
-          Positioned(
-            top: -42,
-            left: mine ? 0 : null,
-            right: mine ? null : 0,
-            child: _HoverQuickActions(
-              onReaction: onReaction,
-              onReply: onReply,
-              onOpenActions: onOpenActions,
-            ),
           ),
       ],
     );
@@ -273,7 +262,7 @@ class _MessageBubbleState extends State<MessageBubble> {
                       ? CrossAxisAlignment.end
                       : CrossAxisAlignment.start,
                   children: [
-                    stacked,
+                    bubbleWithBadges,
                     if (groups.isNotEmpty) const SizedBox(height: 15),
                   ],
                 ),
@@ -284,11 +273,40 @@ class _MessageBubbleState extends State<MessageBubble> {
       ),
     );
 
-    if (!_hoverCapable) return content;
+    // The toolbar lives in a *separate*, genuinely full-width Stack (rather
+    // than overflowing the narrow bubble Stack above via a negative-offset
+    // Positioned) because Flutter's default hit-testing only considers a
+    // RenderBox's own layout size — content painted outside that box via
+    // Positioned + Clip.none is visible but never receives pointer/click
+    // events. That's what made the toolbar disappear the instant the mouse
+    // approached it and made it unclickable. Placing it in the open gutter
+    // beside the bubble (matching Signal's own placement) keeps it within
+    // real, hit-testable bounds.
+    final withToolbar = Stack(
+      children: [
+        SizedBox(width: double.infinity, child: content),
+        if (showToolbar)
+          Positioned.fill(
+            child: Align(
+              alignment: mine ? Alignment.centerLeft : Alignment.centerRight,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: _HoverQuickActions(
+                  onReaction: onReaction,
+                  onReply: onReply,
+                  onOpenActions: onOpenActions,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+
+    if (!_hoverCapable) return withToolbar;
     return MouseRegion(
       onEnter: (_) => _setHovering(true),
       onExit: (_) => _setHovering(false),
-      child: content,
+      child: withToolbar,
     );
   }
 }

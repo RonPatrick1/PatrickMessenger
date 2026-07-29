@@ -167,6 +167,48 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets(
+    'moving onto the toolbar keeps it visible and clickable '
+    '(regression: toolbar used to overflow its hit-testable bounds)',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+
+      final event = message(eventId: r'$message');
+      final timeline = Timeline(
+        room: room,
+        chunk: TimelineChunk(events: [event]),
+      );
+      var replied = false;
+      await tester.pumpWidget(
+        pump(event, timeline, onReply: () => replied = true),
+      );
+
+      final gesture = await tester.createGesture(
+        kind: PointerDeviceKind.mouse,
+      );
+      await gesture.addPointer(
+        location: tester.getCenter(find.byType(MessageBubble)),
+      );
+      await tester.pump();
+      expect(find.byTooltip('Reply'), findsOneWidget);
+
+      // Move from the bubble onto the toolbar's own rendered position, the
+      // same motion a real user makes to reach it. This must NOT trigger
+      // onExit along the way, and the toolbar must still be there once the
+      // pointer actually arrives.
+      await gesture.moveTo(tester.getCenter(find.byTooltip('Reply')));
+      await tester.pump();
+      expect(find.byTooltip('Reply'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Reply'));
+      await tester.pump();
+      expect(replied, isTrue);
+
+      await gesture.removePointer();
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
   testWidgets('hover toolbar stays hidden in selection mode', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
 
