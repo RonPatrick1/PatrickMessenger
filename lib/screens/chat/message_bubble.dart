@@ -236,6 +236,13 @@ class _MessageBubbleState extends State<MessageBubble> {
       ],
     );
 
+    // This gutter reserves breathing room on the side opposite the bubble's
+    // tail so short messages don't stretch edge to edge. When the hover
+    // toolbar is showing, it needs to sit right next to the bubble instead
+    // — otherwise this same gutter ends up *before* the toolbar too, adding
+    // its 52px on top of the toolbar's own small padding, which is why
+    // shrinking just the toolbar's padding earlier barely closed the gap.
+    final gutter = showToolbar ? 4.0 : 52.0;
     final bubbleColumn = Flexible(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 480),
@@ -243,8 +250,8 @@ class _MessageBubbleState extends State<MessageBubble> {
           padding: EdgeInsets.only(
             top: 4,
             bottom: 4,
-            left: mine ? 52 : 0,
-            right: mine ? 0 : 52,
+            left: mine ? gutter : 0,
+            right: mine ? 0 : gutter,
           ),
           child: Opacity(
             opacity: event.status.isSent ? 1 : 0.58,
