@@ -2203,6 +2203,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                             _toggleSelected(event),
                                         onReaction: (emoji) =>
                                             _toggleReaction(event, emoji),
+                                        onReply: () => _startReply(event),
                                       ),
                                     );
                                   },

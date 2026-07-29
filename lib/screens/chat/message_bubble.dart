@@ -12,12 +12,13 @@ import '../../archive/archive_contract.dart';
 import '../../archive/archive_repository.dart';
 import '../../matrix/display_names.dart';
 import '../../receipts/message_receipt_service.dart';
+import 'emoji_picker_dialog.dart';
 import 'emoji_style.dart';
 import 'liam_icon.dart';
 import 'message_interactions.dart';
 import 'message_status_indicator.dart';
 
-class MessageBubble extends StatelessWidget {
+class MessageBubble extends StatefulWidget {
   final Event event;
   final Timeline timeline;
   final bool mine;
@@ -29,6 +30,7 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback onOpenActions;
   final VoidCallback onSelectionTap;
   final ValueChanged<String> onReaction;
+  final VoidCallback onReply;
   final MessageReceiptService receiptService;
   final ArchiveRoomData archive;
 
@@ -44,13 +46,46 @@ class MessageBubble extends StatelessWidget {
     required this.onOpenActions,
     required this.onSelectionTap,
     required this.onReaction,
+    required this.onReply,
     required this.receiptService,
     required this.archive,
     super.key,
   });
 
   @override
+  State<MessageBubble> createState() => _MessageBubbleState();
+}
+
+class _MessageBubbleState extends State<MessageBubble> {
+  bool get _hoverCapable =>
+      defaultTargetPlatform == TargetPlatform.linux ||
+      defaultTargetPlatform == TargetPlatform.macOS ||
+      defaultTargetPlatform == TargetPlatform.windows;
+
+  bool _hovering = false;
+
+  void _setHovering(bool value) {
+    if (_hovering == value) return;
+    setState(() => _hovering = value);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final event = widget.event;
+    final timeline = widget.timeline;
+    final mine = widget.mine;
+    final selectionMode = widget.selectionMode;
+    final selected = widget.selected;
+    final pinned = widget.pinned;
+    final actionsEnabled = widget.actionsEnabled;
+    final liamUserId = widget.liamUserId;
+    final onOpenActions = widget.onOpenActions;
+    final onSelectionTap = widget.onSelectionTap;
+    final onReaction = widget.onReaction;
+    final onReply = widget.onReply;
+    final receiptService = widget.receiptService;
+    final archive = widget.archive;
+
     final displayEvent = event.getDisplayEvent(timeline);
     final liamAnswer = isLiamAnswer(displayEvent, liamUserId: liamUserId);
     final colors = Theme.of(context).colorScheme;
@@ -66,8 +101,153 @@ class MessageBubble extends StatelessWidget {
         ? colors.onPrimaryContainer
         : colors.onSurfaceVariant;
     final edited = event.hasAggregatedEvents(timeline, RelationshipTypes.edit);
+    final groups = groupedReactions(event, timeline, event.room.client.userID);
+    final showToolbar = _hovering && actionsEnabled && !selectionMode;
 
-    return Material(
+    final bubble = DecoratedBox(
+      decoration: BoxDecoration(
+        color: bubbleColor,
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(18),
+          topRight: const Radius.circular(18),
+          bottomLeft: Radius.circular(mine ? 18 : 5),
+          bottomRight: Radius.circular(mine ? 5 : 18),
+        ),
+        border: selected
+            ? Border.all(color: colors.tertiary, width: 2)
+            : null,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!mine && !liamAnswer)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 5),
+                child: Text(
+                  readableMatrixUserName(
+                    event.senderFromMemoryOrFallback,
+                  ),
+                  style: Theme.of(context).textTheme.labelMedium
+                      ?.copyWith(
+                        color: colors.primary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+              ),
+            _ReplyPreview(
+              event: event,
+              timeline: timeline,
+              textColor: textColor,
+              archive: archive,
+            ),
+            _MessageContent(
+              event: displayEvent,
+              textColor: textColor,
+              liamUserId: liamUserId,
+            ),
+            const SizedBox(height: 4),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (pinned) ...[
+                  Icon(
+                    Icons.push_pin,
+                    size: 13,
+                    color: textColor.withValues(alpha: 0.7),
+                  ),
+                  const SizedBox(width: 4),
+                ],
+                if (edited) ...[
+                  Text(
+                    'edited',
+                    style: Theme.of(context)
+                        .textTheme
+                        .labelSmall
+                        ?.copyWith(
+                          color: textColor.withValues(
+                            alpha: 0.7,
+                          ),
+                        ),
+                  ),
+                  const SizedBox(width: 6),
+                ],
+                Text(
+                  time,
+                  style: Theme.of(context).textTheme.labelSmall
+                      ?.copyWith(
+                        color: textColor.withValues(alpha: 0.7),
+                      ),
+                ),
+                if (mine) ...[
+                  const SizedBox(width: 4),
+                  ListenableBuilder(
+                    listenable: receiptService,
+                    builder: (context, _) =>
+                        MessageStatusIndicator(
+                          summary: receiptService.summary(
+                            event,
+                          ),
+                          color: textColor.withValues(
+                            alpha: 0.75,
+                          ),
+                        ),
+                  ),
+                ],
+                if (!selectionMode && actionsEnabled) ...[
+                  const SizedBox(width: 2),
+                  IconButton(
+                    onPressed: onOpenActions,
+                    tooltip:
+                        'Message actions: reply, edit, '
+                        'delete, and more',
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints.tightFor(
+                      width: 30,
+                      height: 26,
+                    ),
+                    icon: Icon(
+                      Icons.more_horiz,
+                      size: 19,
+                      color: textColor.withValues(alpha: 0.8),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final stacked = Stack(
+      clipBehavior: Clip.none,
+      children: [
+        bubble,
+        if (groups.isNotEmpty)
+          Positioned(
+            bottom: -11,
+            left: mine ? 6 : null,
+            right: mine ? null : 6,
+            child: _ReactionBadges(groups: groups, onReaction: onReaction),
+          ),
+        if (showToolbar)
+          Positioned(
+            top: -42,
+            left: mine ? 0 : null,
+            right: mine ? null : 0,
+            child: _HoverQuickActions(
+              onReaction: onReaction,
+              onReply: onReply,
+              onOpenActions: onOpenActions,
+            ),
+          ),
+      ],
+    );
+
+    final content = Material(
       color: selected
           ? colors.tertiaryContainer.withValues(alpha: 0.22)
           : Colors.transparent,
@@ -93,128 +273,8 @@ class MessageBubble extends StatelessWidget {
                       ? CrossAxisAlignment.end
                       : CrossAxisAlignment.start,
                   children: [
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: bubbleColor,
-                        borderRadius: BorderRadius.only(
-                          topLeft: const Radius.circular(18),
-                          topRight: const Radius.circular(18),
-                          bottomLeft: Radius.circular(mine ? 18 : 5),
-                          bottomRight: Radius.circular(mine ? 5 : 18),
-                        ),
-                        border: selected
-                            ? Border.all(color: colors.tertiary, width: 2)
-                            : null,
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(10),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (!mine && !liamAnswer)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 5),
-                                child: Text(
-                                  readableMatrixUserName(
-                                    event.senderFromMemoryOrFallback,
-                                  ),
-                                  style: Theme.of(context).textTheme.labelMedium
-                                      ?.copyWith(
-                                        color: colors.primary,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                ),
-                              ),
-                            _ReplyPreview(
-                              event: event,
-                              timeline: timeline,
-                              textColor: textColor,
-                              archive: archive,
-                            ),
-                            _MessageContent(
-                              event: displayEvent,
-                              textColor: textColor,
-                              liamUserId: liamUserId,
-                            ),
-                            const SizedBox(height: 4),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (pinned) ...[
-                                  Icon(
-                                    Icons.push_pin,
-                                    size: 13,
-                                    color: textColor.withValues(alpha: 0.7),
-                                  ),
-                                  const SizedBox(width: 4),
-                                ],
-                                if (edited) ...[
-                                  Text(
-                                    'edited',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .labelSmall
-                                        ?.copyWith(
-                                          color: textColor.withValues(
-                                            alpha: 0.7,
-                                          ),
-                                        ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                ],
-                                Text(
-                                  time,
-                                  style: Theme.of(context).textTheme.labelSmall
-                                      ?.copyWith(
-                                        color: textColor.withValues(alpha: 0.7),
-                                      ),
-                                ),
-                                if (mine) ...[
-                                  const SizedBox(width: 4),
-                                  ListenableBuilder(
-                                    listenable: receiptService,
-                                    builder: (context, _) =>
-                                        MessageStatusIndicator(
-                                          summary: receiptService.summary(
-                                            event,
-                                          ),
-                                          color: textColor.withValues(
-                                            alpha: 0.75,
-                                          ),
-                                        ),
-                                  ),
-                                ],
-                                if (!selectionMode && actionsEnabled) ...[
-                                  const SizedBox(width: 2),
-                                  IconButton(
-                                    onPressed: onOpenActions,
-                                    tooltip:
-                                        'Message actions: reply, edit, '
-                                        'delete, and more',
-                                    visualDensity: VisualDensity.compact,
-                                    padding: EdgeInsets.zero,
-                                    constraints: const BoxConstraints.tightFor(
-                                      width: 30,
-                                      height: 26,
-                                    ),
-                                    icon: Icon(
-                                      Icons.more_horiz,
-                                      size: 19,
-                                      color: textColor.withValues(alpha: 0.8),
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    _ReactionBar(
-                      event: event,
-                      timeline: timeline,
-                      onReaction: onReaction,
-                    ),
+                    stacked,
+                    if (groups.isNotEmpty) const SizedBox(height: 15),
                   ],
                 ),
               ),
@@ -222,6 +282,13 @@ class MessageBubble extends StatelessWidget {
           ),
         ),
       ),
+    );
+
+    if (!_hoverCapable) return content;
+    return MouseRegion(
+      onEnter: (_) => _setHovering(true),
+      onExit: (_) => _setHovering(false),
+      child: content,
     );
   }
 }
@@ -313,43 +380,102 @@ class _ReplyPreviewState extends State<_ReplyPreview> {
   }
 }
 
-class _ReactionBar extends StatelessWidget {
-  final Event event;
-  final Timeline timeline;
+class _ReactionBadges extends StatelessWidget {
+  final List<ReactionGroup> groups;
   final ValueChanged<String> onReaction;
 
-  const _ReactionBar({
-    required this.event,
-    required this.timeline,
+  const _ReactionBadges({required this.groups, required this.onReaction});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Wrap(
+      spacing: 3,
+      children: [
+        for (final group in groups)
+          Material(
+            color: group.reactedByMe
+                ? colors.primaryContainer
+                : colors.surfaceContainerHigh,
+            shape: StadiumBorder(
+              side: BorderSide(color: colors.surface, width: 1.5),
+            ),
+            elevation: 1,
+            child: InkWell(
+              customBorder: const StadiumBorder(),
+              onTap: () => onReaction(group.emoji),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 2,
+                ),
+                child: ReactionLabel(emoji: group.emoji, count: group.count),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _HoverQuickActions extends StatelessWidget {
+  final ValueChanged<String> onReaction;
+  final VoidCallback onReply;
+  final VoidCallback onOpenActions;
+
+  const _HoverQuickActions({
     required this.onReaction,
+    required this.onReply,
+    required this.onOpenActions,
   });
 
   @override
   Widget build(BuildContext context) {
-    final groups = groupedReactions(event, timeline, event.room.client.userID);
-    if (groups.isEmpty) return const SizedBox.shrink();
     final colors = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(top: 3),
-      child: Wrap(
-        spacing: 4,
-        runSpacing: 4,
-        children: [
-          for (final group in groups)
-            ActionChip(
-              visualDensity: VisualDensity.compact,
-              side: BorderSide(
-                color: group.reactedByMe
-                    ? colors.primary
-                    : colors.outlineVariant,
+    return Material(
+      color: colors.surfaceContainerHighest,
+      elevation: 3,
+      borderRadius: BorderRadius.circular(20),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Wrap(
+          children: [
+            for (final emoji in quickReactionEmojis)
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints.tightFor(
+                  width: 32,
+                  height: 32,
+                ),
+                padding: EdgeInsets.zero,
+                onPressed: () => onReaction(emoji),
+                tooltip: 'React $emoji',
+                icon: EmojiGlyph(emoji, size: 17),
               ),
-              backgroundColor: group.reactedByMe
-                  ? colors.primaryContainer
-                  : colors.surfaceContainer,
-              label: ReactionLabel(emoji: group.emoji, count: group.count),
-              onPressed: () => onReaction(group.emoji),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints.tightFor(
+                width: 32,
+                height: 32,
+              ),
+              padding: EdgeInsets.zero,
+              onPressed: onReply,
+              tooltip: 'Reply',
+              icon: const Icon(Icons.reply, size: 18),
             ),
-        ],
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints.tightFor(
+                width: 32,
+                height: 32,
+              ),
+              padding: EdgeInsets.zero,
+              onPressed: onOpenActions,
+              tooltip: 'More actions',
+              icon: const Icon(Icons.more_horiz, size: 18),
+            ),
+          ],
+        ),
       ),
     );
   }
