@@ -102,20 +102,53 @@ import Vision
       binaryMessenger: engineBridge.applicationRegistrar.messenger()
     )
     mediaSaveChannel.setMethodCallHandler { call, result in
-      guard call.method == "saveImage",
+      guard (call.method == "saveImage" || call.method == "saveVideo"),
             let arguments = call.arguments as? [String: Any],
-            let typedData = arguments["bytes"] as? FlutterStandardTypedData,
             let name = arguments["name"] as? String else {
         result(FlutterMethodNotImplemented)
         return
       }
-      Self.savePictureToPhotos(data: typedData.data, name: name, result: result)
+      if call.method == "saveVideo" {
+        guard let sourcePath = arguments["path"] as? String else {
+          result(FlutterError(
+            code: "invalid_video",
+            message: "The video file is invalid.",
+            details: nil
+          ))
+          return
+        }
+        Self.saveMediaToPhotos(
+          data: nil,
+          fileURL: URL(fileURLWithPath: sourcePath),
+          name: name,
+          resourceType: .video,
+          result: result
+        )
+      } else {
+        guard let typedData = arguments["bytes"] as? FlutterStandardTypedData else {
+          result(FlutterError(
+            code: "invalid_picture",
+            message: "The picture is invalid.",
+            details: nil
+          ))
+          return
+        }
+        Self.saveMediaToPhotos(
+          data: typedData.data,
+          fileURL: nil,
+          name: name,
+          resourceType: .photo,
+          result: result
+        )
+      }
     }
   }
 
-  private static func savePictureToPhotos(
-    data: Data,
+  private static func saveMediaToPhotos(
+    data: Data?,
+    fileURL: URL?,
     name: String,
+    resourceType: PHAssetResourceType,
     result: @escaping FlutterResult
   ) {
     let save: (PHAuthorizationStatus) -> Void = { status in
@@ -140,15 +173,19 @@ import Vision
         let request = PHAssetCreationRequest.forAsset()
         let options = PHAssetResourceCreationOptions()
         options.originalFilename = (name as NSString).lastPathComponent
-        request.addResource(with: .photo, data: data, options: options)
+        if let fileURL {
+          request.addResource(with: resourceType, fileURL: fileURL, options: options)
+        } else if let data {
+          request.addResource(with: resourceType, data: data, options: options)
+        }
       } completionHandler: { success, error in
         DispatchQueue.main.async {
           if success {
             result(nil)
           } else {
             result(FlutterError(
-              code: "picture_save_failed",
-              message: error?.localizedDescription ?? "The picture could not be saved.",
+              code: "media_save_failed",
+              message: error?.localizedDescription ?? "The media file could not be saved.",
               details: nil
             ))
           }

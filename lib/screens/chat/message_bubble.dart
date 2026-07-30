@@ -16,7 +16,7 @@ import '../../archive/archive_repository.dart';
 import '../../matrix/display_names.dart';
 import '../../receipts/message_receipt_service.dart';
 import '../../services/offset_aes_ctr.dart';
-import '../../services/picture_save_service.dart';
+import '../../services/media_save_service.dart';
 import '../../services/streaming_encrypted_video_playback.dart';
 import 'emoji_picker_dialog.dart';
 import 'emoji_style.dart';
@@ -927,7 +927,7 @@ class _FullImageDialogState extends State<_FullImageDialog> {
     });
     try {
       final image = await _image;
-      final result = await PictureSaveService.save(
+      final result = await MediaSaveService.saveImage(
         bytes: image.bytes,
         name: image.name,
         mimeType: image.mimeType,
@@ -1098,6 +1098,9 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
       : null;
 
   bool _loadingFull = false;
+  bool _savingVideo = false;
+  bool _videoSaved = false;
+  String? _videoSaveStatus;
   Player? _player;
   VideoController? _controller;
   EncryptedVideoStreamSession? _session;
@@ -1189,8 +1192,101 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
     });
   }
 
+  Future<void> _saveVideo() async {
+    if (_savingVideo || _videoSaved) return;
+    setState(() {
+      _savingVideo = true;
+      _videoSaveStatus = 'Downloading and saving video…';
+    });
+    try {
+      final video = await widget.event.downloadAndDecryptAttachment();
+      final result = await MediaSaveService.saveVideo(
+        bytes: video.bytes,
+        name: video.name,
+        mimeType: video.mimeType,
+      );
+      if (mounted) {
+        setState(() {
+          _videoSaved = result != null;
+          _videoSaveStatus = result?.message ?? 'Save canceled.';
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _videoSaveStatus = 'The video could not be saved.');
+      }
+    } finally {
+      if (mounted) setState(() => _savingVideo = false);
+    }
+  }
+
+  Widget _saveVideoButton() {
+    return _ScrimIconButton(
+      icon: _videoSaved ? Icons.check : Icons.download,
+      tooltip: _videoSaved ? 'Video saved' : 'Save video',
+      loading: _savingVideo,
+      onPressed: _savingVideo || _videoSaved ? null : _saveVideo,
+    );
+  }
+
+  Widget _saveVideoStatusOverlay(ColorScheme colors) {
+    final status = _videoSaveStatus;
+    if (status == null) return const SizedBox.shrink();
+    return Positioned(
+      left: 8,
+      right: 8,
+      bottom: 8,
+      child: IgnorePointer(
+        child: Center(
+          child: Material(
+            color: colors.primaryContainer,
+            elevation: 6,
+            borderRadius: BorderRadius.circular(14),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_savingVideo) ...[
+                    SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: colors.onPrimaryContainer,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ] else if (_videoSaved) ...[
+                    Icon(
+                      Icons.check_circle,
+                      size: 18,
+                      color: colors.onPrimaryContainer,
+                    ),
+                    const SizedBox(width: 7),
+                  ],
+                  Flexible(
+                    child: Text(
+                      status,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: colors.onPrimaryContainer,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
     if (_controller != null) {
       return SizedBox(
         width: 280,
@@ -1203,6 +1299,7 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
                 child: Video(controller: _controller!),
               ),
             ),
+            Positioned(top: 4, right: 40, child: _saveVideoButton()),
             Positioned(
               top: 4,
               right: 4,
@@ -1212,6 +1309,7 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
                 onPressed: _stop,
               ),
             ),
+            _saveVideoStatusOverlay(colors),
           ],
         ),
       );
@@ -1271,6 +1369,8 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
                           size: 56,
                         ),
                 ),
+                Positioned(top: 4, right: 4, child: _saveVideoButton()),
+                _saveVideoStatusOverlay(Theme.of(context).colorScheme),
               ],
             ),
           ),
@@ -1283,12 +1383,14 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
 class _ScrimIconButton extends StatelessWidget {
   final IconData icon;
   final String tooltip;
-  final VoidCallback onPressed;
+  final bool loading;
+  final VoidCallback? onPressed;
 
   const _ScrimIconButton({
     required this.icon,
     required this.tooltip,
     required this.onPressed,
+    this.loading = false,
   });
 
   @override
@@ -1301,7 +1403,15 @@ class _ScrimIconButton extends StatelessWidget {
         padding: EdgeInsets.zero,
         iconSize: 18,
         color: Colors.white,
-        icon: Icon(icon),
+        icon: loading
+            ? const SizedBox.square(
+                dimension: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            : Icon(icon),
         tooltip: tooltip,
         onPressed: onPressed,
       ),

@@ -20,14 +20,16 @@ import java.io.File
 import java.io.FileOutputStream
 
 class MainActivity : FlutterActivity() {
-    private data class PendingImageSave(
-        val bytes: ByteArray,
+    private data class PendingMediaSave(
+        val bytes: ByteArray?,
+        val sourcePath: String?,
         val name: String,
         val mimeType: String,
+        val isVideo: Boolean,
         val result: MethodChannel.Result,
     )
 
-    private var pendingImageSave: PendingImageSave? = null
+    private var pendingMediaSave: PendingMediaSave? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -58,18 +60,32 @@ class MainActivity : FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             "com.patricklamphier.patrickMessenger/media_save",
         ).setMethodCallHandler { call, result ->
-            if (call.method != "saveImage") {
+            if (call.method != "saveImage" && call.method != "saveVideo") {
                 result.notImplemented()
                 return@setMethodCallHandler
             }
+            val isVideo = call.method == "saveVideo"
             val bytes = call.argument<ByteArray>("bytes")
+            val sourcePath = call.argument<String>("path")
             val name = call.argument<String>("name")
             val mimeType = call.argument<String>("mimeType")
-            if (bytes == null || name.isNullOrBlank() || mimeType.isNullOrBlank()) {
-                result.error("invalid_picture", "The picture is invalid.", null)
+            if (
+                (isVideo && sourcePath.isNullOrBlank()) ||
+                    (!isVideo && bytes == null) ||
+                    name.isNullOrBlank() ||
+                    mimeType.isNullOrBlank()
+            ) {
+                result.error("invalid_media", "The media file is invalid.", null)
                 return@setMethodCallHandler
             }
-            val pending = PendingImageSave(bytes, name, mimeType, result)
+            val pending = PendingMediaSave(
+                bytes = bytes,
+                sourcePath = sourcePath,
+                name = name,
+                mimeType = mimeType,
+                isVideo = isVideo,
+                result = result,
+            )
             if (
                 Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
                     ContextCompat.checkSelfPermission(
@@ -77,18 +93,18 @@ class MainActivity : FlutterActivity() {
                         Manifest.permission.WRITE_EXTERNAL_STORAGE,
                     ) != PackageManager.PERMISSION_GRANTED
             ) {
-                if (pendingImageSave != null) {
-                    result.error("save_in_progress", "Another picture is being saved.", null)
+                if (pendingMediaSave != null) {
+                    result.error("save_in_progress", "Another file is being saved.", null)
                     return@setMethodCallHandler
                 }
-                pendingImageSave = pending
+                pendingMediaSave = pending
                 ActivityCompat.requestPermissions(
                     this,
                     arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
                     MEDIA_SAVE_PERMISSION_REQUEST,
                 )
             } else {
-                saveImage(pending)
+                saveMedia(pending)
             }
         }
     }
@@ -100,33 +116,33 @@ class MainActivity : FlutterActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != MEDIA_SAVE_PERMISSION_REQUEST) return
-        val pending = pendingImageSave ?: return
-        pendingImageSave = null
+        val pending = pendingMediaSave ?: return
+        pendingMediaSave = null
         if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            saveImage(pending)
+            saveMedia(pending)
         } else {
             pending.result.error(
-                "photo_permission_denied",
-                "Photo storage permission was denied.",
+                "media_permission_denied",
+                "Media storage permission was denied.",
                 null,
             )
         }
     }
 
-    private fun saveImage(pending: PendingImageSave) {
+    private fun saveMedia(pending: PendingMediaSave) {
         Thread {
             try {
                 val savedLocation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    saveImageWithMediaStore(pending)
+                    saveWithMediaStore(pending)
                 } else {
-                    saveLegacyImage(pending)
+                    saveLegacyMedia(pending)
                 }
                 runOnUiThread { pending.result.success(savedLocation) }
             } catch (error: Exception) {
                 runOnUiThread {
                     pending.result.error(
-                        "picture_save_failed",
-                        error.localizedMessage ?: "The picture could not be saved.",
+                        "media_save_failed",
+                        error.localizedMessage ?: "The media file could not be saved.",
                         null,
                     )
                 }
@@ -134,26 +150,35 @@ class MainActivity : FlutterActivity() {
         }.start()
     }
 
-    private fun saveImageWithMediaStore(pending: PendingImageSave): String {
+    private fun saveWithMediaStore(pending: PendingMediaSave): String {
         val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, safeFileName(pending.name))
-            put(MediaStore.Images.Media.MIME_TYPE, pending.mimeType)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, safeFileName(pending.name))
+            put(MediaStore.MediaColumns.MIME_TYPE, pending.mimeType)
             put(
-                MediaStore.Images.Media.RELATIVE_PATH,
-                "${Environment.DIRECTORY_PICTURES}/Patrick Messenger",
+                MediaStore.MediaColumns.RELATIVE_PATH,
+                "${if (pending.isVideo) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES}/Patrick Messenger",
             )
-            put(MediaStore.Images.Media.IS_PENDING, 1)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val collection = if (pending.isVideo) {
+            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         }
         val uri = contentResolver.insert(
-            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+            collection,
             values,
-        ) ?: throw IllegalStateException("Android could not create the picture.")
+        ) ?: throw IllegalStateException("Android could not create the media file.")
         try {
             contentResolver.openOutputStream(uri)?.use { output ->
-                output.write(pending.bytes)
-            } ?: throw IllegalStateException("Android could not open the picture.")
+                if (pending.sourcePath != null) {
+                    File(pending.sourcePath).inputStream().use { input -> input.copyTo(output) }
+                } else {
+                    output.write(pending.bytes!!)
+                }
+            } ?: throw IllegalStateException("Android could not open the media file.")
             values.clear()
-            values.put(MediaStore.Images.Media.IS_PENDING, 0)
+            values.put(MediaStore.MediaColumns.IS_PENDING, 0)
             contentResolver.update(uri, values, null, null)
             return uri.toString()
         } catch (error: Exception) {
@@ -163,17 +188,25 @@ class MainActivity : FlutterActivity() {
     }
 
     @Suppress("DEPRECATION")
-    private fun saveLegacyImage(pending: PendingImageSave): String {
+    private fun saveLegacyMedia(pending: PendingMediaSave): String {
         val directory = File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+            Environment.getExternalStoragePublicDirectory(
+                if (pending.isVideo) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES,
+            ),
             "Patrick Messenger",
         )
         if (!directory.exists() && !directory.mkdirs()) {
-            throw IllegalStateException("Android could not create the pictures folder.")
+            throw IllegalStateException("Android could not create the media folder.")
         }
         val desired = File(directory, safeFileName(pending.name))
         val output = uniqueFile(desired)
-        FileOutputStream(output).use { it.write(pending.bytes) }
+        if (pending.sourcePath != null) {
+            File(pending.sourcePath).inputStream().use { input ->
+                FileOutputStream(output).use { target -> input.copyTo(target) }
+            }
+        } else {
+            FileOutputStream(output).use { it.write(pending.bytes!!) }
+        }
         MediaScannerConnection.scanFile(
             this,
             arrayOf(output.absolutePath),
