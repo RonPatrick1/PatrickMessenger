@@ -81,6 +81,7 @@ void main() {
   Widget pump(
     Event event,
     Timeline timeline, {
+    bool mine = false,
     bool selectionMode = false,
     ValueChanged<String>? onReaction,
     VoidCallback? onReply,
@@ -91,7 +92,7 @@ void main() {
         body: MessageBubble(
           event: event,
           timeline: timeline,
-          mine: false,
+          mine: mine,
           selectionMode: selectionMode,
           selected: false,
           pinned: false,
@@ -289,6 +290,49 @@ void main() {
     expect(tester.getRect(bubble), before);
 
     await gesture.removePointer();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('hover toolbar stays directly beside either side of the bubble', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+
+    for (final mine in [false, true]) {
+      final event = message(
+        eventId: mine ? r'$mine' : r'$theirs',
+        body: 'Short message',
+      );
+      final timeline = Timeline(
+        room: room,
+        chunk: TimelineChunk(events: [event]),
+      );
+      await tester.pumpWidget(pump(event, timeline, mine: mine));
+
+      final bubble = find.byWidgetPredicate(
+        (widget) =>
+            widget is DecoratedBox &&
+            widget.decoration is BoxDecoration &&
+            (widget.decoration as BoxDecoration).borderRadius != null,
+      );
+      final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await gesture.addPointer(
+        location: tester.getCenter(find.byType(MessageBubble)),
+      );
+      await tester.pump();
+
+      final bubbleRect = tester.getRect(bubble);
+      if (mine) {
+        final closestAction = tester.getRect(find.byTooltip('More actions'));
+        expect(bubbleRect.left - closestAction.right, lessThanOrEqualTo(20));
+      } else {
+        final closestAction = tester.getRect(find.byTooltip('React 👍'));
+        expect(closestAction.left - bubbleRect.right, lessThanOrEqualTo(20));
+      }
+
+      await gesture.removePointer();
+    }
+
     debugDefaultTargetPlatformOverride = null;
   });
 

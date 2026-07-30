@@ -229,34 +229,9 @@ class _MessageBubbleState extends State<MessageBubble> {
     // Desktop permanently reserves the quick-action toolbar's exact width.
     // Hovering therefore changes only opacity/content, never the width that
     // the message bubble is allowed to use (and never its wrapping/shape).
-    const toolbarWidth = 264.0;
+    const toolbarWidth = 268.0;
     final reserveToolbar = _hoverCapable && actionsEnabled && !selectionMode;
     final gutter = reserveToolbar ? 4.0 : 52.0;
-    final bubbleColumn = Flexible(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 480),
-        child: Padding(
-          padding: EdgeInsets.only(
-            top: 4,
-            bottom: 4,
-            left: mine ? gutter : 0,
-            right: mine ? 0 : gutter,
-          ),
-          child: Opacity(
-            opacity: event.status.isSent ? 1 : 0.58,
-            child: Column(
-              crossAxisAlignment: mine
-                  ? CrossAxisAlignment.end
-                  : CrossAxisAlignment.start,
-              children: [
-                bubbleWithBadges,
-                if (groups.isNotEmpty) const SizedBox(height: 15),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
 
     // The toolbar is a normal Row sibling directly adjacent to the bubble's
     // own (naturally-sized, Flexible) width — not an absolutely-positioned
@@ -276,12 +251,17 @@ class _MessageBubbleState extends State<MessageBubble> {
         ? SizedBox(
             width: toolbarWidth,
             child: showToolbar
-                ? Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    child: _HoverQuickActions(
-                      onReaction: onReaction,
-                      onReply: onReply,
-                      onOpenActions: onOpenActions,
+                ? Align(
+                    alignment: mine
+                        ? Alignment.centerRight
+                        : Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      child: _HoverQuickActions(
+                        onReaction: onReaction,
+                        onReply: onReply,
+                        onOpenActions: onOpenActions,
+                      ),
                     ),
                   )
                 : null,
@@ -296,16 +276,48 @@ class _MessageBubbleState extends State<MessageBubble> {
         onTap: selectionMode && actionsEnabled ? onSelectionTap : null,
         onLongPress: actionsEnabled ? onOpenActions : null,
         onSecondaryTap: actionsEnabled ? onOpenActions : null,
-        child: Row(
-          mainAxisAlignment: mine
-              ? MainAxisAlignment.end
-              : MainAxisAlignment.start,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            if (mine && toolbarSlot != null) toolbarSlot,
-            bubbleColumn,
-            if (!mine && toolbarSlot != null) toolbarSlot,
-          ],
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final availableBubbleWidth =
+                constraints.maxWidth - (reserveToolbar ? toolbarWidth : 0);
+            final maximumBubbleWidth = availableBubbleWidth.clamp(1.0, 480.0);
+            final bubbleColumn = ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: maximumBubbleWidth),
+              child: Padding(
+                padding: EdgeInsets.only(
+                  top: 4,
+                  bottom: 4,
+                  left: mine ? gutter : 0,
+                  right: mine ? 0 : gutter,
+                ),
+                child: Opacity(
+                  opacity: event.status.isSent ? 1 : 0.58,
+                  child: Column(
+                    crossAxisAlignment: mine
+                        ? CrossAxisAlignment.end
+                        : CrossAxisAlignment.start,
+                    children: [
+                      bubbleWithBadges,
+                      if (groups.isNotEmpty) const SizedBox(height: 15),
+                    ],
+                  ),
+                ),
+              ),
+            );
+
+            return Align(
+              alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  if (mine && toolbarSlot != null) toolbarSlot,
+                  bubbleColumn,
+                  if (!mine && toolbarSlot != null) toolbarSlot,
+                ],
+              ),
+            );
+          },
         ),
       ),
     );
@@ -581,7 +593,8 @@ class _HoverQuickActions extends StatelessWidget {
       color: Colors.transparent,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-        child: Wrap(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             for (final emoji in quickReactionEmojis)
               IconButton(
@@ -903,10 +916,15 @@ class _FullImageDialogState extends State<_FullImageDialog> {
   late final Future<MatrixFile> _image = widget.event
       .downloadAndDecryptAttachment();
   bool _saving = false;
+  bool _saved = false;
+  String? _saveStatus;
 
   Future<void> _save() async {
-    if (_saving) return;
-    setState(() => _saving = true);
+    if (_saving || _saved) return;
+    setState(() {
+      _saving = true;
+      _saveStatus = 'Downloading and saving picture…';
+    });
     try {
       final image = await _image;
       final result = await PictureSaveService.save(
@@ -914,16 +932,15 @@ class _FullImageDialogState extends State<_FullImageDialog> {
         name: image.name,
         mimeType: image.mimeType,
       );
-      if (mounted && result != null) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(result.message)));
+      if (mounted) {
+        setState(() {
+          _saved = result != null;
+          _saveStatus = result?.message ?? 'Save canceled.';
+        });
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('The picture could not be saved.')),
-        );
+        setState(() => _saveStatus = 'The picture could not be saved.');
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -982,9 +999,11 @@ class _FullImageDialogState extends State<_FullImageDialog> {
                   tooltip: 'Close',
                 ),
                 IconButton.filled(
-                  onPressed: _saving ? null : _save,
+                  onPressed: _saving || _saved ? null : _save,
                   style: pictureControlStyle,
-                  icon: _saving
+                  icon: _saved
+                      ? const Icon(Icons.check)
+                      : _saving
                       ? SizedBox.square(
                           dimension: 20,
                           child: CircularProgressIndicator(
@@ -993,11 +1012,64 @@ class _FullImageDialogState extends State<_FullImageDialog> {
                           ),
                         )
                       : const Icon(Icons.download),
-                  tooltip: 'Save picture',
+                  tooltip: _saved ? 'Picture saved' : 'Save picture',
                 ),
               ],
             ),
           ),
+          if (_saveStatus != null)
+            Positioned(
+              left: 24,
+              right: 24,
+              bottom: 20,
+              child: SafeArea(
+                top: false,
+                child: Center(
+                  child: Material(
+                    color: colors.primaryContainer,
+                    elevation: 6,
+                    borderRadius: BorderRadius.circular(18),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 12,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_saving) ...[
+                            SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: colors.onPrimaryContainer,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                          ] else if (_saved) ...[
+                            Icon(
+                              Icons.check_circle,
+                              size: 20,
+                              color: colors.onPrimaryContainer,
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                          Flexible(
+                            child: Text(
+                              _saveStatus!,
+                              style: TextStyle(
+                                color: colors.onPrimaryContainer,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
