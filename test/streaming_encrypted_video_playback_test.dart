@@ -10,7 +10,7 @@ void main() {
     'serves a suffix seek with a decrypted homeserver range request',
     () async {
       final plaintext = Uint8List.fromList(
-        List<int>.generate(3 * 1024 * 1024, (index) => index % 251),
+        List<int>.generate(10 * 1024 * 1024, (index) => index % 251),
       );
       final key = Uint8List.fromList(
         List<int>.generate(32, (index) => index + 1),
@@ -84,6 +84,27 @@ void main() {
           requestedRanges,
           contains('bytes=$alignedStart-${plaintext.length - 1}'),
         );
+
+        const start = 32;
+        const windowLength = 8 * 1024 * 1024;
+        final windowRequest = await localClient.getUrl(
+          Uri.parse('http://127.0.0.1:${session.port}/video'),
+        );
+        windowRequest.headers.set(HttpHeaders.rangeHeader, 'bytes=$start-');
+        final windowResponse = await windowRequest.close();
+        final receivedLength = await windowResponse.fold<int>(
+          0,
+          (length, chunk) => length + chunk.length,
+        );
+        const end = start + windowLength - 1;
+
+        expect(windowResponse.statusCode, HttpStatus.partialContent);
+        expect(
+          windowResponse.headers.value(HttpHeaders.contentRangeHeader),
+          'bytes $start-$end/${plaintext.length}',
+        );
+        expect(receivedLength, windowLength);
+        expect(requestedRanges, contains('bytes=$start-$end'));
       } finally {
         session?.dispose();
         localClient.close(force: true);

@@ -9,6 +9,8 @@ import 'package:pointycastle/export.dart';
 
 import 'offset_aes_ctr.dart';
 
+const _maximumRangeResponseBytes = 8 * 1024 * 1024;
+
 /// Serves Matrix encrypted video to a local media player through a seekable
 /// loopback HTTP endpoint. Every player seek becomes a homeserver byte-range
 /// request and is decrypted while it is forwarded, so playback does not wait
@@ -145,6 +147,7 @@ Future<void> _handleRequest(
       return;
     }
 
+    response.bufferOutput = false;
     response.headers
       ..set(HttpHeaders.acceptRangesHeader, 'bytes')
       ..set(HttpHeaders.contentTypeHeader, mimeType)
@@ -262,6 +265,12 @@ _ByteRange? _parseRange(String? header, int totalLength) {
       end = min(parsedEnd, totalLength - 1);
     }
   }
+  // Native players commonly ask for `start-EOF` again whenever their cache
+  // advances. Passing each request through unchanged caused several
+  // overlapping 30–95 MB downloads to run concurrently. A bounded partial
+  // response is still within the requested range; its Content-Range tells
+  // the player where to request the next window.
+  end = min(end, start + _maximumRangeResponseBytes - 1);
   return _ByteRange(start: start, end: end, partial: true);
 }
 

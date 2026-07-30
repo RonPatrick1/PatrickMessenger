@@ -918,9 +918,24 @@ class _FullImageDialogState extends State<_FullImageDialog> {
   bool _saving = false;
   bool _saved = false;
   String? _saveStatus;
+  Timer? _saveStatusTimer;
+
+  @override
+  void dispose() {
+    _saveStatusTimer?.cancel();
+    super.dispose();
+  }
+
+  void _dismissSaveStatusSoon() {
+    _saveStatusTimer?.cancel();
+    _saveStatusTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _saveStatus = null);
+    });
+  }
 
   Future<void> _save() async {
     if (_saving || _saved) return;
+    _saveStatusTimer?.cancel();
     setState(() {
       _saving = true;
       _saveStatus = 'Downloading and saving picture…';
@@ -937,10 +952,12 @@ class _FullImageDialogState extends State<_FullImageDialog> {
           _saved = result != null;
           _saveStatus = result?.message ?? 'Save canceled.';
         });
+        _dismissSaveStatusSoon();
       }
     } catch (_) {
       if (mounted) {
         setState(() => _saveStatus = 'The picture could not be saved.');
+        _dismissSaveStatusSoon();
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -1101,6 +1118,7 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
   bool _savingVideo = false;
   bool _videoSaved = false;
   String? _videoSaveStatus;
+  Timer? _videoSaveStatusTimer;
   Player? _player;
   VideoController? _controller;
   EncryptedVideoStreamSession? _session;
@@ -1108,6 +1126,7 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
 
   @override
   void dispose() {
+    _videoSaveStatusTimer?.cancel();
     _sessionEvents?.cancel();
     _session?.dispose();
     _player?.dispose();
@@ -1194,6 +1213,7 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
 
   Future<void> _saveVideo() async {
     if (_savingVideo || _videoSaved) return;
+    _videoSaveStatusTimer?.cancel();
     setState(() {
       _savingVideo = true;
       _videoSaveStatus = 'Downloading and saving video…';
@@ -1210,14 +1230,23 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
           _videoSaved = result != null;
           _videoSaveStatus = result?.message ?? 'Save canceled.';
         });
+        _dismissVideoSaveStatusSoon();
       }
     } catch (_) {
       if (mounted) {
         setState(() => _videoSaveStatus = 'The video could not be saved.');
+        _dismissVideoSaveStatusSoon();
       }
     } finally {
       if (mounted) setState(() => _savingVideo = false);
     }
+  }
+
+  void _dismissVideoSaveStatusSoon() {
+    _videoSaveStatusTimer?.cancel();
+    _videoSaveStatusTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _videoSaveStatus = null);
+    });
   }
 
   Widget _saveVideoButton() {
