@@ -1175,7 +1175,14 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
 
       final player = Player();
       final controller = VideoController(player);
-      await player.open(Media('http://127.0.0.1:${session.port}/video'));
+      final media = Media('http://127.0.0.1:${session.port}/video');
+      if (Platform.isLinux) {
+        await player.open(media, play: false);
+        await _configureLinuxVideoColor(player);
+        await player.play();
+      } else {
+        await player.open(media);
+      }
       if (!mounted) {
         sessionEvents.cancel();
         session.dispose();
@@ -1325,7 +1332,12 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
             Positioned.fill(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: Video(controller: _controller!),
+                child: Platform.isLinux
+                    ? MediaQuery.withClampedTextScaling(
+                        maxScaleFactor: 1,
+                        child: Video(controller: _controller!),
+                      )
+                    : Video(controller: _controller!),
               ),
             ),
             Positioned(top: 4, right: 40, child: _saveVideoButton()),
@@ -1408,6 +1420,53 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
     );
   }
 }
+
+// Flutter's Linux texture is an SDR surface. Explicitly tell libmpv about
+// that output so HDR/HLG phone recordings are tone-mapped instead of sending
+// HDR brightness values straight into the SDR texture and looking washed out.
+// Mobile platforms retain their native color-management behavior.
+Future<void> _configureLinuxVideoColor(Player player) async {
+  if (!Platform.isLinux) return;
+
+  final nativePlayer = player.platform as dynamic;
+  for (final option in _linuxSdrVideoOptions.entries) {
+    await nativePlayer.setProperty(option.key, option.value);
+  }
+
+  // This is the format used by Samsung HDR phone recordings. libmpv's
+  // embedded Flutter texture path does not consistently apply its HLG output
+  // transform, so convert HLG/BT.2020 to an ordinary SDR/BT.709 frame before
+  // that frame reaches Flutter. SDR videos bypass this filter entirely.
+  var sourceGamma = player.state.videoParams.gamma;
+  if (sourceGamma == null) {
+    try {
+      sourceGamma =
+          (await player.stream.videoParams
+                  .firstWhere((params) => params.gamma != null)
+                  .timeout(const Duration(seconds: 2)))
+              .gamma;
+    } on TimeoutException {
+      // Unknown/untagged video should retain normal player color handling.
+    }
+  }
+  if (sourceGamma == 'hlg') {
+    await nativePlayer.setProperty('vf', _linuxHlgToSdrFilter);
+  }
+}
+
+const _linuxSdrVideoOptions = <String, String>{
+  'target-prim': 'bt.709',
+  'target-trc': 'bt.1886',
+  'target-peak': '203',
+  'tone-mapping': 'bt.2390',
+  'gamut-mapping-mode': 'perceptual',
+  'hdr-compute-peak': 'yes',
+};
+
+const _linuxHlgToSdrFilter =
+    'lavfi=[zscale=t=linear:npl=203,format=gbrpf32le,'
+    'tonemap=tonemap=hable,'
+    'zscale=p=bt709:t=bt709:m=bt709:r=tv,format=yuv420p]';
 
 class _ScrimIconButton extends StatelessWidget {
   final IconData icon;

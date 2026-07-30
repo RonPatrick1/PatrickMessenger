@@ -29,6 +29,10 @@ class MessageNotificationService {
   final Set<String> _recentEventIdSet = <String>{};
 
   StreamSubscription<Event>? _timelineSubscription;
+  // Matrix currently exposes messages decrypted after their original sync
+  // only through its legacy EventUpdate stream.
+  // ignore: deprecated_member_use
+  StreamSubscription<EventUpdate>? _decryptedTimelineSubscription;
   StreamSubscription<Event>? _inviteSubscription;
   StreamSubscription<SyncUpdate>? _syncSubscription;
   StreamSubscription<LoginState>? _loginSubscription;
@@ -116,6 +120,33 @@ class MessageNotificationService {
     _timelineSubscription ??= _client.onTimelineEvent.stream.listen((event) {
       if (!shouldNotifyForTimelineEvent(
         timelineReady: _timelineReady,
+        eventType: event.type,
+        relationshipType: event.relationshipType,
+        senderId: event.senderId,
+        ownUserId: _client.userID,
+        transactionId: event.transactionId,
+      )) {
+        return;
+      }
+      unawaited(_showEvent(event));
+    });
+
+    // A room key can arrive in a later sync than the encrypted message. In
+    // that case Matrix cannot emit a decrypted onTimelineEvent initially. It
+    // retries when the key arrives and publishes a decryptedTimelineQueue
+    // update instead. Listen for that recovery path so the now-readable live
+    // message is not permanently skipped by notifications.
+    // ignore: deprecated_member_use
+    _decryptedTimelineSubscription ??= _client.onEvent.stream.listen((update) {
+      if (!_timelineReady ||
+          update.type != EventUpdateType.decryptedTimelineQueue) {
+        return;
+      }
+      final room = _client.getRoomById(update.roomID);
+      if (room == null) return;
+      final event = Event.fromJson(update.content, room);
+      if (!shouldNotifyForTimelineEvent(
+        timelineReady: true,
         eventType: event.type,
         relationshipType: event.relationshipType,
         senderId: event.senderId,
@@ -399,6 +430,7 @@ class MessageNotificationService {
 
   Future<void> dispose() async {
     await _timelineSubscription?.cancel();
+    await _decryptedTimelineSubscription?.cancel();
     await _inviteSubscription?.cancel();
     await _syncSubscription?.cancel();
     await _loginSubscription?.cancel();
