@@ -108,9 +108,22 @@ class PatrickMessengerApp extends StatelessWidget {
   ThemeData _theme(Brightness brightness) {
     // A restrained steel blue derived from Liam's blue/cyan icon palette.
     const seed = Color(0xFF2D6192);
-    final colorScheme = ColorScheme.fromSeed(
+    final generated = ColorScheme.fromSeed(
       seedColor: seed,
       brightness: brightness,
+    );
+    // Keep Material's secondary and tertiary component families in the same
+    // LiamBlue palette. Generated accent families can otherwise introduce
+    // unrelated warm colors into tonal buttons, dialogs, and selections.
+    final colorScheme = generated.copyWith(
+      secondary: generated.primary,
+      onSecondary: generated.onPrimary,
+      secondaryContainer: generated.primaryContainer,
+      onSecondaryContainer: generated.onPrimaryContainer,
+      tertiary: generated.primary,
+      onTertiary: generated.onPrimary,
+      tertiaryContainer: generated.primaryContainer,
+      onTertiaryContainer: generated.onPrimaryContainer,
     );
     return ThemeData(
       colorScheme: colorScheme,

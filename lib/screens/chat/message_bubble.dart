@@ -932,6 +932,15 @@ class _FullImageDialogState extends State<_FullImageDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final pictureControlStyle = IconButton.styleFrom(
+      backgroundColor: colors.primaryContainer,
+      foregroundColor: colors.onPrimaryContainer,
+      disabledBackgroundColor: colors.primaryContainer.withValues(alpha: 0.55),
+      disabledForegroundColor: colors.onPrimaryContainer.withValues(
+        alpha: 0.55,
+      ),
+    );
     return Dialog.fullscreen(
       backgroundColor: Colors.black,
       child: Stack(
@@ -966,17 +975,22 @@ class _FullImageDialogState extends State<_FullImageDialog> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                IconButton.filledTonal(
+                IconButton.filled(
                   onPressed: () => Navigator.pop(context),
+                  style: pictureControlStyle,
                   icon: const Icon(Icons.close),
                   tooltip: 'Close',
                 ),
-                IconButton.filledTonal(
+                IconButton.filled(
                   onPressed: _saving ? null : _save,
+                  style: pictureControlStyle,
                   icon: _saving
-                      ? const SizedBox.square(
+                      ? SizedBox.square(
                           dimension: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: colors.onPrimaryContainer,
+                          ),
                         )
                       : const Icon(Icons.download),
                   tooltip: 'Save picture',
