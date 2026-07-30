@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
@@ -10,26 +9,14 @@ import 'package:pointycastle/export.dart';
 
 import 'offset_aes_ctr.dart';
 
-const _rangeWindowSize = 512 * 1024;
-const _sequentialWaitAllowance = 2 * 1024 * 1024;
-
-/// Serves encrypted Matrix video to a local media player without putting the
-/// complete attachment in memory.
-///
-/// A sequential background download is written to an encrypted temporary
-/// file and hashed for Matrix integrity verification. Requests close to the
-/// downloaded prefix are served from that cache as it grows. Seeks beyond the
-/// prefix (including the MP4 metadata that is often stored at the end) are
-/// fetched from the homeserver with an HTTP range request and decrypted while
-/// being forwarded to the player.
+/// Serves Matrix encrypted video to a local media player through a seekable
+/// loopback HTTP endpoint. Every player seek becomes a homeserver byte-range
+/// request and is decrypted while it is forwarded, so playback does not wait
+/// for a second complete-file integrity download or retain the video in RAM.
 class EncryptedVideoStreamSession {
   final Isolate _isolate;
   final ReceivePort _receivePort;
-  final Directory _cacheDirectory;
   final int port;
-
-  /// Emits `integrity-failure` if the complete ciphertext does not match the
-  /// attachment's Matrix SHA-256 hash.
   final Stream<String> events;
 
   bool _disposed = false;
@@ -37,7 +24,6 @@ class EncryptedVideoStreamSession {
   EncryptedVideoStreamSession._(
     this._isolate,
     this._receivePort,
-    this._cacheDirectory,
     this.port,
     this.events,
   );
@@ -48,15 +34,11 @@ class EncryptedVideoStreamSession {
     required Uint8List key,
     required Uint8List iv,
     required int totalLength,
-    required String? expectedSha256,
     required String mimeType,
   }) async {
     if (totalLength <= 0) {
       throw ArgumentError.value(totalLength, 'totalLength');
     }
-    final cacheDirectory = await Directory.systemTemp.createTemp(
-      'patrick-video-',
-    );
     final receivePort = ReceivePort();
     final broadcast = receivePort.asBroadcastStream();
     final isolate = await Isolate.spawn(
@@ -67,9 +49,7 @@ class EncryptedVideoStreamSession {
         key: key,
         iv: iv,
         totalLength: totalLength,
-        expectedSha256: expectedSha256,
         mimeType: mimeType,
-        cachePath: '${cacheDirectory.path}/ciphertext.bin',
         replyPort: receivePort.sendPort,
       ),
     );
@@ -77,13 +57,11 @@ class EncryptedVideoStreamSession {
     if (first is! int) {
       isolate.kill(priority: Isolate.immediate);
       receivePort.close();
-      await cacheDirectory.delete(recursive: true);
       throw StateError('Failed to start video stream server: $first');
     }
     return EncryptedVideoStreamSession._(
       isolate,
       receivePort,
-      cacheDirectory,
       first,
       broadcast.where((event) => event is String).cast<String>(),
     );
@@ -94,20 +72,6 @@ class EncryptedVideoStreamSession {
     _disposed = true;
     _isolate.kill(priority: Isolate.immediate);
     _receivePort.close();
-    unawaited(_deleteCache());
-  }
-
-  Future<void> _deleteCache() async {
-    // Give native file handles from the killed isolate a moment to close.
-    await Future<void>.delayed(const Duration(milliseconds: 50));
-    try {
-      if (await _cacheDirectory.exists()) {
-        await _cacheDirectory.delete(recursive: true);
-      }
-    } catch (_) {
-      // The OS also clears its temporary directory. A delayed native handle
-      // release should not turn stopping playback into a user-visible error.
-    }
   }
 }
 
@@ -117,9 +81,7 @@ class _StreamSessionParams {
   final Uint8List key;
   final Uint8List iv;
   final int totalLength;
-  final String? expectedSha256;
   final String mimeType;
-  final String cachePath;
   final SendPort replyPort;
 
   const _StreamSessionParams({
@@ -128,9 +90,7 @@ class _StreamSessionParams {
     required this.key,
     required this.iv,
     required this.totalLength,
-    required this.expectedSha256,
     required this.mimeType,
-    required this.cachePath,
     required this.replyPort,
   });
 }
@@ -139,32 +99,13 @@ Future<void> _isolateMain(_StreamSessionParams params) async {
   final replyPort = params.replyPort;
   try {
     final httpClient = http.Client();
-    final coordinator = _FetchCoordinator(
-      totalLength: params.totalLength,
-      cacheFile: File(params.cachePath),
-    );
     final downloadUri = Uri.parse(params.downloadUri);
-    final verificationRequest = http.Request('GET', downloadUri)
-      ..headers[HttpHeaders.authorizationHeader] =
-          'Bearer ${params.accessToken}';
-    unawaited(
-      coordinator
-          .consume(
-            httpClient.send(verificationRequest),
-            expectedSha256: params.expectedSha256,
-          )
-          .then((_) {
-            if (coordinator.failed) replyPort.send('integrity-failure');
-          }),
-    );
-
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     replyPort.send(server.port);
     server.listen((request) {
       unawaited(
         _handleRequest(
           request,
-          coordinator: coordinator,
           httpClient: httpClient,
           downloadUri: downloadUri,
           accessToken: params.accessToken,
@@ -182,7 +123,6 @@ Future<void> _isolateMain(_StreamSessionParams params) async {
 
 Future<void> _handleRequest(
   HttpRequest request, {
-  required _FetchCoordinator coordinator,
   required http.Client httpClient,
   required Uri downloadUri,
   required String accessToken,
@@ -224,61 +164,23 @@ Future<void> _handleRequest(
       return;
     }
 
-    final closeEnoughToCache =
-        coordinator.finished ||
-        range.start <= coordinator.bytesReceived + _sequentialWaitAllowance;
-    if (closeEnoughToCache) {
-      await _serveFromGrowingCache(
-        response,
-        range: range,
-        coordinator: coordinator,
-        key: key,
-        iv: iv,
-      );
-    } else {
-      await _serveRemoteRange(
-        response,
-        range: range,
-        httpClient: httpClient,
-        downloadUri: downloadUri,
-        accessToken: accessToken,
-        key: key,
-        iv: iv,
-      );
-    }
+    await _serveRemoteRange(
+      response,
+      range: range,
+      httpClient: httpClient,
+      downloadUri: downloadUri,
+      accessToken: accessToken,
+      key: key,
+      iv: iv,
+    );
     await response.close();
   } catch (_) {
-    // Players routinely abandon one range request when seeking to another.
-    // Closing only that response lets the local stream server remain usable.
+    // Players routinely abandon one request when seeking to another. Closing
+    // only that response keeps the local stream server available for the new
+    // request without turning an ordinary seek into a visible error.
     try {
       await response.close();
     } catch (_) {}
-  }
-}
-
-Future<void> _serveFromGrowingCache(
-  HttpResponse response, {
-  required _ByteRange range,
-  required _FetchCoordinator coordinator,
-  required Uint8List key,
-  required Uint8List iv,
-}) async {
-  var cursor = range.start;
-  while (cursor <= range.end) {
-    final chunkEnd = min(cursor + _rangeWindowSize - 1, range.end);
-    final alignedStart = cursor - (cursor % 16);
-    final ciphertext = await coordinator.read(alignedStart, chunkEnd);
-    response.add(
-      decryptRange(
-        ciphertext: ciphertext,
-        ciphertextOffset: alignedStart,
-        start: cursor,
-        end: chunkEnd,
-        key: key,
-        iv: iv,
-      ),
-    );
-    cursor = chunkEnd + 1;
   }
 }
 
@@ -375,113 +277,4 @@ class _ByteRange {
   });
 
   int get length => end - start + 1;
-}
-
-class _FetchCoordinator {
-  final int totalLength;
-  final File cacheFile;
-  int bytesReceived = 0;
-  bool failed = false;
-  Object? error;
-  bool finished = false;
-
-  final List<_RangeWaiter> _waiters = [];
-
-  _FetchCoordinator({required this.totalLength, required this.cacheFile});
-
-  Future<void> consume(
-    Future<http.StreamedResponse> responseFuture, {
-    required String? expectedSha256,
-  }) async {
-    final digest = SHA256Digest();
-    RandomAccessFile? writer;
-    try {
-      final response = await responseFuture;
-      if (response.statusCode >= 400) {
-        throw HttpException(
-          'Attachment download failed with HTTP ${response.statusCode}',
-        );
-      }
-      writer = await cacheFile.open(mode: FileMode.write);
-      await for (final chunk in response.stream) {
-        final bytes = chunk is Uint8List ? chunk : Uint8List.fromList(chunk);
-        if (bytesReceived + bytes.length > totalLength) {
-          throw StateError('Attachment stream exceeded its declared size.');
-        }
-        await writer.writeFrom(bytes);
-        digest.update(bytes, 0, bytes.length);
-        bytesReceived += bytes.length;
-        _completeReadyWaiters();
-      }
-      if (bytesReceived != totalLength) {
-        throw StateError(
-          'Attachment stream ended at $bytesReceived of $totalLength bytes.',
-        );
-      }
-      if (expectedSha256 != null) {
-        final hash = Uint8List(digest.digestSize);
-        digest.doFinal(hash, 0);
-        if (base64.normalize(base64.encode(hash)) !=
-            base64.normalize(expectedSha256)) {
-          throw StateError('Attachment integrity check failed.');
-        }
-      }
-    } catch (caught) {
-      failed = true;
-      error = caught;
-    } finally {
-      await writer?.close();
-      finished = true;
-      _completeReadyWaiters();
-    }
-  }
-
-  Future<Uint8List> read(int start, int end) async {
-    await _waitFor(end + 1);
-    final reader = await cacheFile.open(mode: FileMode.read);
-    try {
-      await reader.setPosition(start);
-      final bytes = await reader.read(end - start + 1);
-      if (bytes.length != end - start + 1) {
-        throw StateError('Encrypted video cache returned a short read.');
-      }
-      return bytes;
-    } finally {
-      await reader.close();
-    }
-  }
-
-  Future<void> _waitFor(int targetByteExclusive) {
-    if (targetByteExclusive <= bytesReceived) return Future.value();
-    if (finished || failed) {
-      return Future.error(
-        error ??
-            StateError('stream ended before byte $targetByteExclusive arrived'),
-      );
-    }
-    final waiter = _RangeWaiter(targetByteExclusive);
-    _waiters.add(waiter);
-    return waiter.completer.future;
-  }
-
-  void _completeReadyWaiters() {
-    for (final waiter in _waiters.toList()) {
-      if (waiter.target <= bytesReceived) {
-        waiter.completer.complete();
-        _waiters.remove(waiter);
-      } else if (finished || failed) {
-        waiter.completer.completeError(
-          error ?? StateError('Encrypted video download ended early.'),
-        );
-        _waiters.remove(waiter);
-      }
-    }
-  }
-}
-
-class _RangeWaiter {
-  final int target;
-  final Completer<void> completer = Completer<void>();
-
-  _RangeWaiter(this.target);
 }

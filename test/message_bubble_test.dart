@@ -108,9 +108,7 @@ void main() {
     );
   }
 
-  testWidgets('renders a reaction badge and toggles it on tap', (
-    tester,
-  ) async {
+  testWidgets('renders a reaction badge and toggles it on tap', (tester) async {
     final event = message(eventId: r'$message');
     final timeline = Timeline(
       room: room,
@@ -175,60 +173,57 @@ void main() {
     },
   );
 
-  testWidgets(
-    'tapping the cluster total explodes it into a popup with every '
-    'reaction individually clickable',
-    (tester) async {
-      final event = message(eventId: r'$message');
-      final timeline = Timeline(
-        room: room,
-        chunk: TimelineChunk(events: [event]),
-      );
-      timeline.addAggregatedEvent(
-        reaction(eventId: r'$r1', relatesToEventId: event.eventId, emoji: '👍'),
-      );
-      timeline.addAggregatedEvent(
-        reaction(
-          eventId: r'$r2',
-          relatesToEventId: event.eventId,
-          emoji: '❤️',
-          senderId: '@bob:matrix.example.test',
-        ),
-      );
-      timeline.addAggregatedEvent(
-        reaction(
-          eventId: r'$r3',
-          relatesToEventId: event.eventId,
-          emoji: '😂',
-          senderId: '@carol:matrix.example.test',
-        ),
-      );
+  testWidgets('tapping the cluster total explodes it into a popup with every '
+      'reaction individually clickable', (tester) async {
+    final event = message(eventId: r'$message');
+    final timeline = Timeline(
+      room: room,
+      chunk: TimelineChunk(events: [event]),
+    );
+    timeline.addAggregatedEvent(
+      reaction(eventId: r'$r1', relatesToEventId: event.eventId, emoji: '👍'),
+    );
+    timeline.addAggregatedEvent(
+      reaction(
+        eventId: r'$r2',
+        relatesToEventId: event.eventId,
+        emoji: '❤️',
+        senderId: '@bob:matrix.example.test',
+      ),
+    );
+    timeline.addAggregatedEvent(
+      reaction(
+        eventId: r'$r3',
+        relatesToEventId: event.eventId,
+        emoji: '😂',
+        senderId: '@carol:matrix.example.test',
+      ),
+    );
 
-      String? tapped;
-      await tester.pumpWidget(
-        pump(event, timeline, onReaction: (emoji) => tapped = emoji),
-      );
+    String? tapped;
+    await tester.pumpWidget(
+      pump(event, timeline, onReaction: (emoji) => tapped = emoji),
+    );
 
-      // Tap the total count (not a specific circle) to explode the cluster.
-      await tester.tap(find.text('3'));
-      await tester.pumpAndSettle();
+    // Tap the total count (not a specific circle) to explode the cluster.
+    await tester.tap(find.text('3'));
+    await tester.pumpAndSettle();
 
-      // Every reaction now has its own fully visible, separately tappable
-      // pill in the popup (in addition to the still-present collapsed
-      // circles underneath).
-      expect(find.text('👍'), findsNWidgets(2));
-      expect(find.text('❤️'), findsNWidgets(2));
-      expect(find.text('😂'), findsNWidgets(2));
+    // Every reaction now has its own fully visible, separately tappable
+    // pill in the popup (in addition to the still-present collapsed
+    // circles underneath).
+    expect(find.text('👍'), findsNWidgets(2));
+    expect(find.text('❤️'), findsNWidgets(2));
+    expect(find.text('😂'), findsNWidgets(2));
 
-      await tester.tap(find.text('😂').last);
-      await tester.pumpAndSettle();
+    await tester.tap(find.text('😂').last);
+    await tester.pumpAndSettle();
 
-      expect(tapped, '😂');
-      // The popup closes itself after a selection (showMenu's default
-      // behavior), leaving only the collapsed cluster's own circle.
-      expect(find.text('😂'), findsOneWidget);
-    },
-  );
+    expect(tapped, '😂');
+    // The popup closes itself after a selection (showMenu's default
+    // behavior), leaving only the collapsed cluster's own circle.
+    expect(find.text('😂'), findsOneWidget);
+  });
 
   testWidgets('hover reveals the quick-action toolbar, exit hides it', (
     tester,
@@ -244,9 +239,7 @@ void main() {
 
     expect(find.byTooltip('Reply'), findsNothing);
 
-    final gesture = await tester.createGesture(
-      kind: PointerDeviceKind.mouse,
-    );
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await gesture.addPointer(
       location: tester.getCenter(find.byType(MessageBubble)),
     );
@@ -260,78 +253,111 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets(
-    'moving onto the toolbar keeps it visible and clickable '
-    '(regression: toolbar used to overflow its hit-testable bounds)',
-    (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+  testWidgets('hover toolbar does not resize or reshape the message bubble', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
 
-      final event = message(eventId: r'$message');
-      final timeline = Timeline(
-        room: room,
-        chunk: TimelineChunk(events: [event]),
-      );
-      var replied = false;
-      await tester.pumpWidget(
-        pump(event, timeline, onReply: () => replied = true),
-      );
+    final event = message(
+      eventId: r'$message',
+      body:
+          'A long desktop message that wraps consistently while the quick '
+          'reaction and reply toolbar appears beside it.',
+    );
+    final timeline = Timeline(
+      room: room,
+      chunk: TimelineChunk(events: [event]),
+    );
+    await tester.pumpWidget(pump(event, timeline));
 
-      final gesture = await tester.createGesture(
-        kind: PointerDeviceKind.mouse,
-      );
-      await gesture.addPointer(
-        location: tester.getCenter(find.byType(MessageBubble)),
-      );
-      await tester.pump();
-      expect(find.byTooltip('Reply'), findsOneWidget);
+    final bubble = find.byWidgetPredicate(
+      (widget) =>
+          widget is DecoratedBox &&
+          widget.decoration is BoxDecoration &&
+          (widget.decoration as BoxDecoration).borderRadius != null,
+    );
+    expect(bubble, findsOneWidget);
+    final before = tester.getRect(bubble);
 
-      // Move from the bubble onto the toolbar's own rendered position, the
-      // same motion a real user makes to reach it. This must NOT trigger
-      // onExit along the way, and the toolbar must still be there once the
-      // pointer actually arrives.
-      await gesture.moveTo(tester.getCenter(find.byTooltip('Reply')));
-      await tester.pump();
-      expect(find.byTooltip('Reply'), findsOneWidget);
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer(
+      location: tester.getCenter(find.byType(MessageBubble)),
+    );
+    await tester.pump();
 
-      await tester.tap(find.byTooltip('Reply'));
-      await tester.pump();
-      expect(replied, isTrue);
+    expect(find.byTooltip('Reply'), findsOneWidget);
+    expect(tester.getRect(bubble), before);
 
-      await gesture.removePointer();
-      debugDefaultTargetPlatformOverride = null;
-    },
-  );
+    await gesture.removePointer();
+    debugDefaultTargetPlatformOverride = null;
+  });
 
-  testWidgets(
-    'a video message with no thumbnail info renders a generic '
-    'placeholder (never decodes the raw video as an image)',
-    (tester) async {
-      final event = Event(
-        room: room,
-        eventId: r'$video',
-        senderId: '@alice:matrix.example.test',
-        originServerTs: DateTime(2026, 7, 29, 9, 0),
-        type: EventTypes.Message,
-        content: {
-          'msgtype': MessageTypes.Video,
-          'body': 'clip.mp4',
-          'url': 'mxc://matrix.example.test/abc123',
-        },
-        status: EventStatus.synced,
-      );
-      final timeline = Timeline(
-        room: room,
-        chunk: TimelineChunk(events: [event]),
-      );
+  testWidgets('moving onto the toolbar keeps it visible and clickable '
+      '(regression: toolbar used to overflow its hit-testable bounds)', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
 
-      await tester.pumpWidget(pump(event, timeline));
-      await tester.pump();
-      await tester.pumpAndSettle();
+    final event = message(eventId: r'$message');
+    final timeline = Timeline(
+      room: room,
+      chunk: TimelineChunk(events: [event]),
+    );
+    var replied = false;
+    await tester.pumpWidget(
+      pump(event, timeline, onReply: () => replied = true),
+    );
 
-      expect(find.byIcon(Icons.videocam), findsOneWidget);
-      expect(find.byIcon(Icons.play_circle_fill), findsOneWidget);
-    },
-  );
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer(
+      location: tester.getCenter(find.byType(MessageBubble)),
+    );
+    await tester.pump();
+    expect(find.byTooltip('Reply'), findsOneWidget);
+
+    // Move from the bubble onto the toolbar's own rendered position, the
+    // same motion a real user makes to reach it. This must NOT trigger
+    // onExit along the way, and the toolbar must still be there once the
+    // pointer actually arrives.
+    await gesture.moveTo(tester.getCenter(find.byTooltip('Reply')));
+    await tester.pump();
+    expect(find.byTooltip('Reply'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Reply'));
+    await tester.pump();
+    expect(replied, isTrue);
+
+    await gesture.removePointer();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('a video message with no thumbnail info renders a generic '
+      'placeholder (never decodes the raw video as an image)', (tester) async {
+    final event = Event(
+      room: room,
+      eventId: r'$video',
+      senderId: '@alice:matrix.example.test',
+      originServerTs: DateTime(2026, 7, 29, 9, 0),
+      type: EventTypes.Message,
+      content: {
+        'msgtype': MessageTypes.Video,
+        'body': 'clip.mp4',
+        'url': 'mxc://matrix.example.test/abc123',
+      },
+      status: EventStatus.synced,
+    );
+    final timeline = Timeline(
+      room: room,
+      chunk: TimelineChunk(events: [event]),
+    );
+
+    await tester.pumpWidget(pump(event, timeline));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.byIcon(Icons.videocam), findsOneWidget);
+    expect(find.byIcon(Icons.play_circle_fill), findsOneWidget);
+  });
 
   testWidgets('hover toolbar stays hidden in selection mode', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
@@ -343,9 +369,7 @@ void main() {
     );
     await tester.pumpWidget(pump(event, timeline, selectionMode: true));
 
-    final gesture = await tester.createGesture(
-      kind: PointerDeviceKind.mouse,
-    );
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await gesture.addPointer(
       location: tester.getCenter(find.byType(MessageBubble)),
     );

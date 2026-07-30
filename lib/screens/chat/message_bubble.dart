@@ -16,6 +16,7 @@ import '../../archive/archive_repository.dart';
 import '../../matrix/display_names.dart';
 import '../../receipts/message_receipt_service.dart';
 import '../../services/offset_aes_ctr.dart';
+import '../../services/picture_save_service.dart';
 import '../../services/streaming_encrypted_video_playback.dart';
 import 'emoji_picker_dialog.dart';
 import 'emoji_style.dart';
@@ -118,9 +119,7 @@ class _MessageBubbleState extends State<MessageBubble> {
           bottomLeft: Radius.circular(mine ? 18 : 5),
           bottomRight: Radius.circular(mine ? 5 : 18),
         ),
-        border: selected
-            ? Border.all(color: colors.tertiary, width: 2)
-            : null,
+        border: selected ? Border.all(color: colors.tertiary, width: 2) : null,
       ),
       child: Padding(
         padding: const EdgeInsets.all(10),
@@ -131,14 +130,11 @@ class _MessageBubbleState extends State<MessageBubble> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 5),
                 child: Text(
-                  readableMatrixUserName(
-                    event.senderFromMemoryOrFallback,
+                  readableMatrixUserName(event.senderFromMemoryOrFallback),
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: colors.primary,
+                    fontWeight: FontWeight.w700,
                   ),
-                  style: Theme.of(context).textTheme.labelMedium
-                      ?.copyWith(
-                        color: colors.primary,
-                        fontWeight: FontWeight.w700,
-                      ),
                 ),
               ),
             _ReplyPreview(
@@ -167,37 +163,26 @@ class _MessageBubbleState extends State<MessageBubble> {
                 if (edited) ...[
                   Text(
                     'edited',
-                    style: Theme.of(context)
-                        .textTheme
-                        .labelSmall
-                        ?.copyWith(
-                          color: textColor.withValues(
-                            alpha: 0.7,
-                          ),
-                        ),
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: textColor.withValues(alpha: 0.7),
+                    ),
                   ),
                   const SizedBox(width: 6),
                 ],
                 Text(
                   time,
-                  style: Theme.of(context).textTheme.labelSmall
-                      ?.copyWith(
-                        color: textColor.withValues(alpha: 0.7),
-                      ),
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: textColor.withValues(alpha: 0.7),
+                  ),
                 ),
                 if (mine) ...[
                   const SizedBox(width: 4),
                   ListenableBuilder(
                     listenable: receiptService,
-                    builder: (context, _) =>
-                        MessageStatusIndicator(
-                          summary: receiptService.summary(
-                            event,
-                          ),
-                          color: textColor.withValues(
-                            alpha: 0.75,
-                          ),
-                        ),
+                    builder: (context, _) => MessageStatusIndicator(
+                      summary: receiptService.summary(event),
+                      color: textColor.withValues(alpha: 0.75),
+                    ),
                   ),
                 ],
                 if (!selectionMode && actionsEnabled) ...[
@@ -241,13 +226,12 @@ class _MessageBubbleState extends State<MessageBubble> {
       ],
     );
 
-    // This gutter reserves breathing room on the side opposite the bubble's
-    // tail so short messages don't stretch edge to edge. When the hover
-    // toolbar is showing, it needs to sit right next to the bubble instead
-    // — otherwise this same gutter ends up *before* the toolbar too, adding
-    // its 52px on top of the toolbar's own small padding, which is why
-    // shrinking just the toolbar's padding earlier barely closed the gap.
-    final gutter = showToolbar ? 4.0 : 52.0;
+    // Desktop permanently reserves the quick-action toolbar's exact width.
+    // Hovering therefore changes only opacity/content, never the width that
+    // the message bubble is allowed to use (and never its wrapping/shape).
+    const toolbarWidth = 264.0;
+    final reserveToolbar = _hoverCapable && actionsEnabled && !selectionMode;
+    final gutter = reserveToolbar ? 4.0 : 52.0;
     final bubbleColumn = Flexible(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 480),
@@ -288,14 +272,19 @@ class _MessageBubbleState extends State<MessageBubble> {
     // sidesteps both problems: it sits directly beside the bubble's actual
     // rendered edge (matching Signal), and it's real, non-overflowing
     // layout, so it's always within bounds.
-    final toolbar = showToolbar
-        ? Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            child: _HoverQuickActions(
-              onReaction: onReaction,
-              onReply: onReply,
-              onOpenActions: onOpenActions,
-            ),
+    final toolbarSlot = reserveToolbar
+        ? SizedBox(
+            width: toolbarWidth,
+            child: showToolbar
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    child: _HoverQuickActions(
+                      onReaction: onReaction,
+                      onReply: onReply,
+                      onOpenActions: onOpenActions,
+                    ),
+                  )
+                : null,
           )
         : null;
 
@@ -313,9 +302,9 @@ class _MessageBubbleState extends State<MessageBubble> {
               : MainAxisAlignment.start,
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            if (mine && toolbar != null) toolbar,
+            if (mine && toolbarSlot != null) toolbarSlot,
             bubbleColumn,
-            if (!mine && toolbar != null) toolbar,
+            if (!mine && toolbarSlot != null) toolbarSlot,
           ],
         ),
       ),
@@ -503,9 +492,13 @@ class _ReactionBadges extends StatelessWidget {
     );
   }
 
-  Future<void> _showExplodedPopup(BuildContext context, ColorScheme colors) async {
+  Future<void> _showExplodedPopup(
+    BuildContext context,
+    ColorScheme colors,
+  ) async {
     final button = context.findRenderObject()! as RenderBox;
-    final overlay = Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
     final position = RelativeRect.fromRect(
       Rect.fromPoints(
         button.localToGlobal(Offset.zero, ancestor: overlay),
@@ -554,7 +547,9 @@ class _ReactionBadges extends StatelessWidget {
     required Widget child,
   }) {
     return Material(
-      color: reactedByMe ? colors.primaryContainer : colors.surfaceContainerHigh,
+      color: reactedByMe
+          ? colors.primaryContainer
+          : colors.surfaceContainerHigh,
       shape: StadiumBorder(side: BorderSide(color: colors.surface, width: 1.5)),
       elevation: 1,
       child: InkWell(
@@ -602,10 +597,7 @@ class _HoverQuickActions extends StatelessWidget {
               ),
             IconButton(
               visualDensity: VisualDensity.compact,
-              constraints: const BoxConstraints.tightFor(
-                width: 32,
-                height: 32,
-              ),
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
               padding: EdgeInsets.zero,
               onPressed: onReply,
               tooltip: 'Reply',
@@ -613,10 +605,7 @@ class _HoverQuickActions extends StatelessWidget {
             ),
             IconButton(
               visualDensity: VisualDensity.compact,
-              constraints: const BoxConstraints.tightFor(
-                width: 32,
-                height: 32,
-              ),
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
               padding: EdgeInsets.zero,
               onPressed: onOpenActions,
               tooltip: 'More actions',
@@ -650,8 +639,10 @@ class _MessageContent extends StatelessWidget {
       MessageTypes.Image ||
       MessageTypes.Sticker => _EncryptedImage(event: event),
       MessageTypes.Video => _EncryptedVideo(event: event),
-      MessageTypes.File || MessageTypes.Audio =>
-        _EncryptedAttachment(event: event, textColor: textColor),
+      MessageTypes.File || MessageTypes.Audio => _EncryptedAttachment(
+        event: event,
+        textColor: textColor,
+      ),
       _ =>
         isLiamAnswer(event, liamUserId: liamUserId)
             ? _LiamAnswerContent(event: event, textColor: textColor)
@@ -911,6 +902,33 @@ class _FullImageDialog extends StatefulWidget {
 class _FullImageDialogState extends State<_FullImageDialog> {
   late final Future<MatrixFile> _image = widget.event
       .downloadAndDecryptAttachment();
+  bool _saving = false;
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      final image = await _image;
+      final result = await PictureSaveService.save(
+        bytes: image.bytes,
+        name: image.name,
+        mimeType: image.mimeType,
+      );
+      if (mounted && result != null) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(result.message)));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('The picture could not be saved.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -945,10 +963,25 @@ class _FullImageDialogState extends State<_FullImageDialog> {
             ),
           ),
           SafeArea(
-            child: IconButton.filledTonal(
-              onPressed: () => Navigator.pop(context),
-              icon: const Icon(Icons.close),
-              tooltip: 'Close',
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                IconButton.filledTonal(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
+                  tooltip: 'Close',
+                ),
+                IconButton.filledTonal(
+                  onPressed: _saving ? null : _save,
+                  icon: _saving
+                      ? const SizedBox.square(
+                          dimension: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.download),
+                  tooltip: 'Save picture',
+                ),
+              ],
             ),
           ),
         ],
@@ -1006,9 +1039,6 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
         fileMap.tryGetMap<String, Object?>('key')?.tryGet<String>('k') ?? '',
       );
       final iv = decodeUnpaddedBase64(fileMap.tryGet<String>('iv') ?? '');
-      final expectedSha256 = fileMap
-          .tryGetMap<String, Object?>('hashes')
-          ?.tryGet<String>('sha256');
       final mimeType = event.infoMap.tryGet<String>('mimetype') ?? 'video/mp4';
 
       final client = event.room.client;
@@ -1022,7 +1052,6 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
         key: key,
         iv: iv,
         totalLength: totalLength,
-        expectedSha256: expectedSha256,
         mimeType: mimeType,
       );
       final sessionEvents = session.events.listen((message) {

@@ -48,6 +48,8 @@
 	<string>Connect to the Patrick Messenger and private Liam development services on your local network.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Select pictures from your photo library to send in encrypted conversations.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save pictures from encrypted conversations to your photo library.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Take pictures to send in encrypted conversations.</string>
 	<key>UIApplicationSceneManifest</key>

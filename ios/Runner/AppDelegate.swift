@@ -1,4 +1,5 @@
 import Flutter
+import Photos
 import UIKit
 import UserNotifications
 import Vision
@@ -94,6 +95,71 @@ import Vision
           }
         }
       }
+    }
+
+    let mediaSaveChannel = FlutterMethodChannel(
+      name: "com.patricklamphier.patrickMessenger/media_save",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    mediaSaveChannel.setMethodCallHandler { call, result in
+      guard call.method == "saveImage",
+            let arguments = call.arguments as? [String: Any],
+            let typedData = arguments["bytes"] as? FlutterStandardTypedData,
+            let name = arguments["name"] as? String else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      Self.savePictureToPhotos(data: typedData.data, name: name, result: result)
+    }
+  }
+
+  private static func savePictureToPhotos(
+    data: Data,
+    name: String,
+    result: @escaping FlutterResult
+  ) {
+    let save: (PHAuthorizationStatus) -> Void = { status in
+      let allowed: Bool
+      if #available(iOS 14, *) {
+        allowed = status == .authorized || status == .limited
+      } else {
+        allowed = status == .authorized
+      }
+      guard allowed else {
+        DispatchQueue.main.async {
+          result(FlutterError(
+            code: "photo_permission_denied",
+            message: "Photo library permission was denied.",
+            details: nil
+          ))
+        }
+        return
+      }
+
+      PHPhotoLibrary.shared().performChanges {
+        let request = PHAssetCreationRequest.forAsset()
+        let options = PHAssetResourceCreationOptions()
+        options.originalFilename = (name as NSString).lastPathComponent
+        request.addResource(with: .photo, data: data, options: options)
+      } completionHandler: { success, error in
+        DispatchQueue.main.async {
+          if success {
+            result(nil)
+          } else {
+            result(FlutterError(
+              code: "picture_save_failed",
+              message: error?.localizedDescription ?? "The picture could not be saved.",
+              details: nil
+            ))
+          }
+        }
+      }
+    }
+
+    if #available(iOS 14, *) {
+      PHPhotoLibrary.requestAuthorization(for: .addOnly, handler: save)
+    } else {
+      PHPhotoLibrary.requestAuthorization(save)
     }
   }
 

@@ -1,5 +1,3 @@
-import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -24,13 +22,6 @@ void main() {
         ..init(true, ParametersWithIV<KeyParameter>(KeyParameter(key), iv));
       final ciphertext = Uint8List(plaintext.length);
       cipher.processBytes(plaintext, 0, plaintext.length, ciphertext, 0);
-      final digest = SHA256Digest();
-      digest.update(ciphertext, 0, ciphertext.length);
-      final hash = Uint8List(digest.digestSize);
-      digest.doFinal(hash, 0);
-
-      final releaseFullDownload = Completer<void>();
-      final fullDownloadServed = Completer<void>();
       final requestedRanges = <String>[];
       final sourceServer = await HttpServer.bind(
         InternetAddress.loopbackIPv4,
@@ -38,17 +29,8 @@ void main() {
       );
       sourceServer.listen((request) async {
         final rangeHeader = request.headers.value(HttpHeaders.rangeHeader);
-        if (rangeHeader == null) {
-          await releaseFullDownload.future;
-          request.response
-            ..headers.contentLength = ciphertext.length
-            ..add(ciphertext);
-          await request.response.close();
-          fullDownloadServed.complete();
-          return;
-        }
-
-        requestedRanges.add(rangeHeader);
+        expect(rangeHeader, isNotNull);
+        requestedRanges.add(rangeHeader!);
         final match = RegExp(r'^bytes=(\d+)-(\d+)$').firstMatch(rangeHeader)!;
         final start = int.parse(match.group(1)!);
         final end = int.parse(match.group(2)!);
@@ -74,7 +56,6 @@ void main() {
           key: key,
           iv: iv,
           totalLength: ciphertext.length,
-          expectedSha256: base64.encode(hash),
           mimeType: 'video/mp4',
         );
 
@@ -103,11 +84,7 @@ void main() {
           requestedRanges,
           contains('bytes=$alignedStart-${plaintext.length - 1}'),
         );
-
-        releaseFullDownload.complete();
-        await fullDownloadServed.future;
       } finally {
-        if (!releaseFullDownload.isCompleted) releaseFullDownload.complete();
         session?.dispose();
         localClient.close(force: true);
         await sourceServer.close(force: true);
