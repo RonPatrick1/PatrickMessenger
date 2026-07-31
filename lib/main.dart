@@ -1,7 +1,10 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:fvp/fvp.dart' as fvp;
 import 'package:media_kit/media_kit.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
 import 'archive/archive_repository.dart';
@@ -24,7 +27,16 @@ import 'settings/theme_preference.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  MediaKit.ensureInitialized();
+  if (defaultTargetPlatform == TargetPlatform.linux) {
+    await windowManager.ensureInitialized();
+    fvp.registerWith(
+      options: {
+        'platforms': ['linux'],
+      },
+    );
+  } else {
+    MediaKit.ensureInitialized();
+  }
   AndroidMessageConnectionService.initializeCommunicationPort();
   await _start();
 }

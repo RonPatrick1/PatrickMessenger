@@ -1,15 +1,19 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:chewie/chewie.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:matrix/matrix.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart' as sharing;
+import 'package:video_player/video_player.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../../archive/archive_contract.dart';
 import '../../archive/archive_repository.dart';
@@ -1121,13 +1125,80 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
   Timer? _videoSaveStatusTimer;
   Player? _player;
   VideoController? _controller;
+  VideoPlayerController? _linuxVideoController;
+  ChewieController? _linuxChewieController;
+  bool _linuxNativeFullscreen = false;
   EncryptedVideoStreamSession? _session;
   StreamSubscription<String>? _sessionEvents;
 
   @override
+  void initState() {
+    super.initState();
+
+    if (Platform.isLinux) {
+      HardwareKeyboard.instance.addHandler(_handleLinuxFullscreenKey);
+    }
+  }
+
+  bool _handleLinuxFullscreenKey(KeyEvent event) {
+    if (!Platform.isLinux ||
+        event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.escape) {
+      return false;
+    }
+
+    final controller = _linuxChewieController;
+    if (controller == null || !controller.isFullScreen) {
+      return false;
+    }
+
+    controller.exitFullScreen();
+    return true;
+  }
+
+  Future<void> _setLinuxNativeFullscreen(bool fullscreen) async {
+    try {
+      await windowManager.setFullScreen(fullscreen);
+    } catch (error) {
+      debugPrint('Could not change Linux fullscreen state: $error');
+    }
+  }
+
+  void _syncLinuxNativeFullscreen() {
+    final controller = _linuxChewieController;
+    if (!Platform.isLinux || controller == null) return;
+
+    final fullscreen = controller.isFullScreen;
+    if (fullscreen == _linuxNativeFullscreen) return;
+
+    _linuxNativeFullscreen = fullscreen;
+    unawaited(_setLinuxNativeFullscreen(fullscreen));
+  }
+
+  void _disposeLinuxChewieController() {
+    final controller = _linuxChewieController;
+
+    if (controller != null) {
+      controller.removeListener(_syncLinuxNativeFullscreen);
+      controller.dispose();
+    }
+
+    if (Platform.isLinux && _linuxNativeFullscreen) {
+      _linuxNativeFullscreen = false;
+      unawaited(_setLinuxNativeFullscreen(false));
+    }
+  }
+
+  @override
   void dispose() {
+    if (Platform.isLinux) {
+      HardwareKeyboard.instance.removeHandler(_handleLinuxFullscreenKey);
+    }
+
     _videoSaveStatusTimer?.cancel();
     _sessionEvents?.cancel();
+    _disposeLinuxChewieController();
+    _linuxVideoController?.dispose();
     _session?.dispose();
     _player?.dispose();
     super.dispose();
@@ -1173,29 +1244,78 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
         }
       });
 
-      final player = Player();
-      final controller = VideoController(player);
-      final media = Media('http://127.0.0.1:${session.port}/video');
+      final mediaUrl = Uri.parse('http://127.0.0.1:${session.port}/video');
+
       if (Platform.isLinux) {
-        await player.open(media, play: false);
-        await _configureLinuxVideoColor(player);
-        await player.play();
+        final controller = VideoPlayerController.networkUrl(mediaUrl);
+        ChewieController? chewieController;
+
+        try {
+          await controller.initialize();
+          chewieController = ChewieController(
+            videoPlayerController: controller,
+            aspectRatio: controller.value.aspectRatio,
+            autoPlay: true,
+            looping: false,
+            showControls: true,
+            allowFullScreen: true,
+            allowMuting: true,
+            customControls: const MaterialControls(),
+          );
+        } catch (_) {
+          chewieController?.dispose();
+          await controller.dispose();
+          await sessionEvents.cancel();
+          session.dispose();
+          rethrow;
+        }
+
+        if (!mounted) {
+          chewieController.dispose();
+          await controller.dispose();
+          await sessionEvents.cancel();
+          session.dispose();
+          return;
+        }
+
+        chewieController.addListener(_syncLinuxNativeFullscreen);
+
+        setState(() {
+          _session = session;
+          _sessionEvents = sessionEvents;
+          _linuxVideoController = controller;
+          _linuxChewieController = chewieController;
+          _linuxNativeFullscreen = false;
+          _loadingFull = false;
+        });
       } else {
-        await player.open(media);
+        final player = Player();
+        final controller = VideoController(player);
+
+        try {
+          await player.open(Media(mediaUrl.toString()));
+        } catch (_) {
+          player.dispose();
+          await sessionEvents.cancel();
+          session.dispose();
+          rethrow;
+        }
+
+        if (!mounted) {
+          player.dispose();
+          await sessionEvents.cancel();
+          session.dispose();
+          return;
+        }
+
+        setState(() {
+          _session = session;
+          _sessionEvents = sessionEvents;
+          _player = player;
+          _controller = controller;
+          _loadingFull = false;
+        });
       }
-      if (!mounted) {
-        sessionEvents.cancel();
-        session.dispose();
-        player.dispose();
-        return;
-      }
-      setState(() {
-        _session = session;
-        _sessionEvents = sessionEvents;
-        _player = player;
-        _controller = controller;
-        _loadingFull = false;
-      });
     } catch (_) {
       if (mounted) {
         setState(() => _loadingFull = false);
@@ -1208,10 +1328,15 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
 
   void _stop() {
     _sessionEvents?.cancel();
+    _disposeLinuxChewieController();
+    _linuxVideoController?.dispose();
     _session?.dispose();
     _player?.dispose();
+
     setState(() {
       _sessionEvents = null;
+      _linuxChewieController = null;
+      _linuxVideoController = null;
       _session = null;
       _player = null;
       _controller = null;
@@ -1323,7 +1448,7 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    if (_controller != null) {
+    if (_controller != null || _linuxChewieController != null) {
       return SizedBox(
         width: 280,
         height: 210,
@@ -1333,9 +1458,9 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
                 child: Platform.isLinux
-                    ? MediaQuery.withClampedTextScaling(
-                        maxScaleFactor: 1,
-                        child: Video(controller: _controller!),
+                    ? ColoredBox(
+                        color: Colors.black,
+                        child: Chewie(controller: _linuxChewieController!),
                       )
                     : Video(controller: _controller!),
               ),
@@ -1420,53 +1545,6 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
     );
   }
 }
-
-// Flutter's Linux texture is an SDR surface. Explicitly tell libmpv about
-// that output so HDR/HLG phone recordings are tone-mapped instead of sending
-// HDR brightness values straight into the SDR texture and looking washed out.
-// Mobile platforms retain their native color-management behavior.
-Future<void> _configureLinuxVideoColor(Player player) async {
-  if (!Platform.isLinux) return;
-
-  final nativePlayer = player.platform as dynamic;
-  for (final option in _linuxSdrVideoOptions.entries) {
-    await nativePlayer.setProperty(option.key, option.value);
-  }
-
-  // This is the format used by Samsung HDR phone recordings. libmpv's
-  // embedded Flutter texture path does not consistently apply its HLG output
-  // transform, so convert HLG/BT.2020 to an ordinary SDR/BT.709 frame before
-  // that frame reaches Flutter. SDR videos bypass this filter entirely.
-  var sourceGamma = player.state.videoParams.gamma;
-  if (sourceGamma == null) {
-    try {
-      sourceGamma =
-          (await player.stream.videoParams
-                  .firstWhere((params) => params.gamma != null)
-                  .timeout(const Duration(seconds: 2)))
-              .gamma;
-    } on TimeoutException {
-      // Unknown/untagged video should retain normal player color handling.
-    }
-  }
-  if (sourceGamma == 'hlg') {
-    await nativePlayer.setProperty('vf', _linuxHlgToSdrFilter);
-  }
-}
-
-const _linuxSdrVideoOptions = <String, String>{
-  'target-prim': 'bt.709',
-  'target-trc': 'bt.1886',
-  'target-peak': '203',
-  'tone-mapping': 'bt.2390',
-  'gamut-mapping-mode': 'perceptual',
-  'hdr-compute-peak': 'yes',
-};
-
-const _linuxHlgToSdrFilter =
-    'lavfi=[zscale=t=linear:npl=203,format=gbrpf32le,'
-    'tonemap=tonemap=hable,'
-    'zscale=p=bt709:t=bt709:m=bt709:r=tv,format=yuv420p]';
 
 class _ScrimIconButton extends StatelessWidget {
   final IconData icon;
