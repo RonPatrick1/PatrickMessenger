@@ -412,9 +412,14 @@ class _ChatScreenState extends State<ChatScreen> {
               // vanishes from the timeline instead of rendering as the
               // "can't decrypt" bubble the rest of the app already expects
               // (see timeline_key_recovery.dart's recovery flow, which
-              // assumes these events stay visible).
+              // assumes these events stay visible). Our own internal
+              // receipt/control events are excluded either way (a
+              // successfully-decrypted one never renders as a bubble either,
+              // being a different type than m.room.message), so an
+              // undecryptable one shouldn't suddenly start appearing as one.
               (event.type == EventTypes.Message ||
-                  isUndecryptableEvent(event)) &&
+                  (isUndecryptableEvent(event) &&
+                      event.relationshipType != controlRelationType)) &&
               event.relationshipType != RelationshipTypes.edit &&
               (!hideLiamChatter ||
                   !isLiamChatterEvent(event, liamUserId: widget.liamUserId)),
@@ -542,7 +547,15 @@ class _ChatScreenState extends State<ChatScreen> {
   int _undecryptableEventCount(Timeline timeline) => mergeMatrixTimelineEvents(
     timelineEvents: timeline.events,
     liveEvents: _liveTimelineEvents.values,
-  ).where(isUndecryptableEvent).length;
+  ).where(
+    // Our own internal receipt/control events carry no user-facing content,
+    // so an undecryptable one is not worth alarming the user about — it has
+    // no more consequence than a successfully-decrypted one, which is never
+    // shown either.
+    (event) =>
+        isUndecryptableEvent(event) &&
+        event.relationshipType != controlRelationType,
+  ).length;
 
   void _markLatestMessageRead() {
     final timeline = _timeline;
