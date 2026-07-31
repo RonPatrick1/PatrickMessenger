@@ -405,7 +405,16 @@ class _ChatScreenState extends State<ChatScreen> {
     return visibleEvents
         .where(
           (event) =>
-              event.type == EventTypes.Message &&
+              // An undecryptable event never gets rewritten from
+              // m.room.encrypted to m.room.message even though its content is
+              // replaced with an m.bad.encrypted placeholder, so it must be
+              // allowed through explicitly here — otherwise it silently
+              // vanishes from the timeline instead of rendering as the
+              // "can't decrypt" bubble the rest of the app already expects
+              // (see timeline_key_recovery.dart's recovery flow, which
+              // assumes these events stay visible).
+              (event.type == EventTypes.Message ||
+                  isUndecryptableEvent(event)) &&
               event.relationshipType != RelationshipTypes.edit &&
               (!hideLiamChatter ||
                   !isLiamChatterEvent(event, liamUserId: widget.liamUserId)),
