@@ -114,7 +114,13 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _highlightMessageId;
   bool _didJumpToInitialResult = false;
   int _visibleItemCount = 0;
-  int _visibleArchiveMessageCount = _initialArchiveMessageCount;
+  // Never revealed past what's actually established as safe yet — see
+  // _archiveVisibilityCap. Starting at the full initial count here raced
+  // ahead of Matrix's own (much slower, noise-event-heavy) pagination and
+  // made an imported Signal message from days earlier appear directly
+  // adjacent to whatever few live Matrix messages had loaded so far, with
+  // hundreds of real messages in between never having been requested yet.
+  int _visibleArchiveMessageCount = 0;
   List<ArchiveMessage> _archiveMessages = const [];
 
   bool get _selectionMode => _selectedEventIds.isNotEmpty;
@@ -209,6 +215,46 @@ class _ChatScreenState extends State<ChatScreen> {
     _scheduleTimelineRefresh();
   }
 
+  // How many archive (imported Signal history) messages may safely be
+  // revealed right now without outrunning Matrix's own, much slower,
+  // pagination — Matrix's requestHistory() pages through this room's heavy
+  // mix of receipts/reactions/search-index events to surface real messages,
+  // while archive chunks are already-imported and reveal real content far
+  // faster per page. Without this cap, archive history appeared to "catch
+  // up" to the present almost immediately while Matrix's own window was
+  // still mostly unloaded, making an old imported message look directly
+  // adjacent to a recent live one with hundreds of real messages hidden
+  // between them. Once Matrix has no more history to give, the cap is lifted
+  // entirely.
+  int _archiveVisibilityCap(Timeline? timeline) {
+    if (timeline == null) return 0;
+    if (!timeline.canRequestHistory) return _archiveMessages.length;
+    DateTime? oldestLoadedMatrixTs;
+    for (final event in _messages(timeline)) {
+      final ts = event.originServerTs;
+      if (oldestLoadedMatrixTs == null || ts.isBefore(oldestLoadedMatrixTs)) {
+        oldestLoadedMatrixTs = ts;
+      }
+    }
+    if (oldestLoadedMatrixTs == null) return 0;
+    // _archiveMessages is sorted newest-first, so this finds how many are no
+    // older than the oldest Matrix message currently loaded.
+    final cutoff = _archiveMessages.indexWhere(
+      (message) => message.timestamp.isBefore(oldestLoadedMatrixTs!),
+    );
+    return cutoff == -1 ? _archiveMessages.length : cutoff;
+  }
+
+  void _revealArchiveUpTo(int desiredCount) {
+    final next = min(
+      desiredCount,
+      _archiveVisibilityCap(_timeline),
+    ).clamp(0, _archiveMessages.length);
+    if (next > _visibleArchiveMessageCount) {
+      _visibleArchiveMessageCount = next;
+    }
+  }
+
   Future<void> _prepareInitialTimeline(Timeline timeline) async {
     if (_messages(timeline).length < _initialMatrixMessageCount &&
         timeline.canRequestHistory) {
@@ -238,6 +284,10 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
 
+    if (mounted && identical(_timeline, timeline)) {
+      setState(() => _revealArchiveUpTo(_initialArchiveMessageCount));
+    }
+
     await _recoverVisibleHistoryKeys(timeline);
     if (!mounted || !identical(_timeline, timeline)) return;
     final initialResult = widget.initialSearchResult;
@@ -253,8 +303,10 @@ class _ChatScreenState extends State<ChatScreen> {
   void _handleArchiveChanged() {
     if (!mounted) return;
     unawaited(widget.searchIndex.indexArchiveRoom(widget.archive));
-    final messages = widget.archive.messages;
-    setState(() => _archiveMessages = messages);
+    setState(() {
+      _archiveMessages = widget.archive.messages;
+      _revealArchiveUpTo(_initialArchiveMessageCount);
+    });
   }
 
   Future<void> _toggleLiamChatterHidden() async {
@@ -365,12 +417,7 @@ class _ChatScreenState extends State<ChatScreen> {
         await _recoverVisibleHistoryKeys(timeline);
       }
       if (mounted) {
-        setState(() {
-          _visibleArchiveMessageCount = min(
-            _archiveMessages.length,
-            targetArchiveCount,
-          );
-        });
+        setState(() => _revealArchiveUpTo(targetArchiveCount));
       }
     } catch (_) {
       if (mounted) _showError('Older messages could not be downloaded.');
