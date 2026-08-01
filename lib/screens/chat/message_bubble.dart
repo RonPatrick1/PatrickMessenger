@@ -1156,6 +1156,20 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
     return true;
   }
 
+  Future<void> _enterAndroidFullscreenPreservingOrientation() async {
+    await SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.immersiveSticky,
+      overlays: const [],
+    );
+  }
+
+  Future<void> _exitAndroidFullscreenPreservingOrientation() async {
+    await SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.manual,
+      overlays: SystemUiOverlay.values,
+    );
+  }
+
   Future<void> _setLinuxNativeFullscreen(bool fullscreen) async {
     try {
       await windowManager.setFullScreen(fullscreen);
@@ -1461,6 +1475,14 @@ class _EncryptedVideoState extends State<_EncryptedVideo> {
                     ? ColoredBox(
                         color: Colors.black,
                         child: Chewie(controller: _linuxChewieController!),
+                      )
+                    : Platform.isAndroid
+                    ? Video(
+                        controller: _controller!,
+                        onEnterFullscreen:
+                            _enterAndroidFullscreenPreservingOrientation,
+                        onExitFullscreen:
+                            _exitAndroidFullscreenPreservingOrientation,
                       )
                     : Video(controller: _controller!),
               ),
