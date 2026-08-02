@@ -7,6 +7,7 @@ script_dir="$(
 
 repo_root="$(dirname -- "$script_dir")"
 failed=0
+iphone_unavailable=0
 
 printf '### REPOSITORY\n'
 
@@ -71,11 +72,20 @@ fi
 printf '\n### CORE DEVICE LIST\n'
 
 if command -v xcrun >/dev/null 2>&1; then
-  xcrun devicectl list devices 2>&1
+  device_list="$(xcrun devicectl list devices 2>&1)"
   devicectl_result=$?
+  printf '%s\n' "$device_list"
 
   if [ "$devicectl_result" -eq 0 ]; then
     printf 'PASS: devicectl device listing completed\n'
+    if printf '%s\n' "$device_list" |
+      grep -E 'Elizabeth.*iPhone.*unavailable' >/dev/null 2>&1; then
+      iphone_unavailable=1
+      failed=1
+      printf '%s\n' \
+        'FAIL: Elizabeth’s iPhone is currently unavailable.' \
+        'Unlock it and attach it with a cable, or place it on the same local network as this Mac with Developer Mode enabled.'
+    fi
   else
     printf 'FAIL: devicectl device listing returned %s\n' \
       "$devicectl_result"
@@ -110,6 +120,10 @@ printf '\n### RESULT\n'
 
 if [ "$failed" -eq 0 ]; then
   printf 'PASS: iOS wireless-device environment diagnostics completed\n'
+elif [ "$iphone_unavailable" -eq 1 ]; then
+  printf '%s\n' \
+    'FAIL: Elizabeth’s iPhone cannot currently be refreshed.' \
+    'Required: unlock the iPhone and connect it by cable, or make it reachable on the same local network with Developer Mode enabled.'
 else
   printf 'FAIL: one or more iOS environment checks failed\n'
 fi
