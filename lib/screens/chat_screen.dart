@@ -35,6 +35,7 @@ import 'chat/archive_message_bubble.dart';
 import 'chat/emoji_picker_dialog.dart';
 import 'chat/emoji_style.dart';
 import 'chat/giphy_picker_dialog.dart';
+import 'chat/image_grouping.dart';
 import 'chat/message_action_dialog.dart';
 import 'chat/message_bubble.dart';
 import 'chat/message_interactions.dart';
@@ -474,6 +475,14 @@ class _ChatScreenState extends State<ChatScreen> {
         .toList();
   }
 
+  bool _canGroupImageEvent(Timeline timeline, Event event) {
+    if (widget.room.pinnedEventIds.contains(event.eventId)) {
+      return false;
+    }
+
+    return groupedReactions(event, timeline, event.room.client.userID).isEmpty;
+  }
+
   List<_ChatItem> _chatItems(Timeline timeline) {
     final items = <_ChatItem>[
       ..._messages(timeline).map(_ChatItem.matrix),
@@ -481,17 +490,54 @@ class _ChatScreenState extends State<ChatScreen> {
           .take(_visibleArchiveMessageCount)
           .map(_ChatItem.archive),
     ];
+
     items.sort((a, b) {
       final time = b.timestamp.compareTo(a.timestamp);
       return time != 0 ? time : b.id.compareTo(a.id);
     });
-    return items;
+
+    // Selection mode expands galleries into their underlying Matrix events.
+    // Forwarding, deletion, pinning, and other actions remain event-specific.
+    if (_selectionMode) return items;
+
+    final groupedItems = <_ChatItem>[];
+
+    for (final item in items) {
+      final event = item.event;
+
+      if (event == null || !isGalleryImageEvent(event)) {
+        groupedItems.add(item);
+        continue;
+      }
+
+      final previousItem = groupedItems.isEmpty ? null : groupedItems.last;
+
+      final previousEvent = previousItem == null || previousItem.events.isEmpty
+          ? null
+          : previousItem.events.last;
+
+      final joinsPrevious =
+          previousItem?.archiveMessage == null &&
+          previousEvent != null &&
+          _canGroupImageEvent(timeline, previousEvent) &&
+          _canGroupImageEvent(timeline, event) &&
+          shouldGroupImageEvents(previousEvent, event);
+
+      if (joinsPrevious) {
+        groupedItems[groupedItems.length - 1] = previousItem!
+            .withAdditionalEvent(event);
+      } else {
+        groupedItems.add(item);
+      }
+    }
+
+    return groupedItems;
   }
 
   void _scheduleJumpToResult(List<_ChatItem> items) {
     final result = widget.initialSearchResult;
     if (_didJumpToInitialResult || result == null) return;
-    final index = items.indexWhere((item) => item.id == result.sourceId);
+    final index = items.indexWhere((item) => item.containsId(result.sourceId));
     if (index < 0) return;
     _didJumpToInitialResult = true;
     _highlightMessageId = result.sourceId;
@@ -553,7 +599,9 @@ class _ChatScreenState extends State<ChatScreen> {
         await _recoverVisibleHistoryKeys(timeline);
         items = _chatItems(timeline);
       }
-      final index = items.indexWhere((item) => item.id == result.sourceId);
+      final index = items.indexWhere(
+        (item) => item.containsId(result.sourceId),
+      );
       if (index < 0 || !mounted) {
         if (mounted) _showError('That search result could not be loaded.');
         return;
@@ -591,18 +639,21 @@ class _ChatScreenState extends State<ChatScreen> {
         .length;
   }
 
-  int _undecryptableEventCount(Timeline timeline) => mergeMatrixTimelineEvents(
-    timelineEvents: timeline.events,
-    liveEvents: _liveTimelineEvents.values,
-  ).where(
-    // Our own internal receipt/control events carry no user-facing content,
-    // so an undecryptable one is not worth alarming the user about — it has
-    // no more consequence than a successfully-decrypted one, which is never
-    // shown either.
-    (event) =>
-        isUndecryptableEvent(event) &&
-        event.relationshipType != controlRelationType,
-  ).length;
+  int _undecryptableEventCount(Timeline timeline) =>
+      mergeMatrixTimelineEvents(
+            timelineEvents: timeline.events,
+            liveEvents: _liveTimelineEvents.values,
+          )
+          .where(
+            // Our own internal receipt/control events carry no user-facing content,
+            // so an undecryptable one is not worth alarming the user about — it has
+            // no more consequence than a successfully-decrypted one, which is never
+            // shown either.
+            (event) =>
+                isUndecryptableEvent(event) &&
+                event.relationshipType != controlRelationType,
+          )
+          .length;
 
   void _markLatestMessageRead() {
     final timeline = _timeline;
@@ -937,8 +988,14 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  String _newImageBatchId() {
+    final random = Random.secure().nextInt(0x7fffffff).toRadixString(16);
+    return '${DateTime.now().microsecondsSinceEpoch}-$random';
+  }
+
   Future<void> _sendPicture() async {
     if (_sendingAttachment) return;
+
     const imageTypes = XTypeGroup(
       label: 'Pictures',
       extensions: <String>[
@@ -956,28 +1013,56 @@ class _ChatScreenState extends State<ChatScreen> {
       uniformTypeIdentifiers: <String>['public.image'],
       webWildCards: <String>['image/*'],
     );
-    final selectedFile = defaultTargetPlatform == TargetPlatform.iOS
-        ? await ImagePicker().pickImage(
-            source: ImageSource.gallery,
-            requestFullMetadata: false,
-          )
-        : await openFile(acceptedTypeGroups: const <XTypeGroup>[imageTypes]);
-    if (selectedFile == null) return;
+
+    final useImagePicker =
+        defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+
+    final selectedFiles = useImagePicker
+        ? await ImagePicker().pickMultiImage(requestFullMetadata: false)
+        : await openFiles(acceptedTypeGroups: const <XTypeGroup>[imageTypes]);
+
+    if (selectedFiles.isEmpty) return;
 
     const maximumBytes = 25 * 1024 * 1024;
-    if (await selectedFile.length() > maximumBytes) {
-      _showError('Choose a file smaller than 25 MB.');
+    final acceptedFiles = <XFile>[];
+    var skipped = 0;
+
+    for (final selectedFile in selectedFiles) {
+      if (await selectedFile.length() > maximumBytes) {
+        skipped++;
+      } else {
+        acceptedFiles.add(selectedFile);
+      }
+    }
+
+    if (acceptedFiles.isEmpty) {
+      _showError('Choose pictures smaller than 25 MB.');
       return;
     }
 
+    final mediaBatchId = acceptedFiles.length > 1 ? _newImageBatchId() : null;
+
     try {
-      await _sendImageBytes(
-        bytes: await selectedFile.readAsBytes(),
-        name: selectedFile.name,
-        mimeType: selectedFile.mimeType,
-      );
+      for (var index = 0; index < acceptedFiles.length; index++) {
+        final selectedFile = acceptedFiles[index];
+
+        await _sendImageBytes(
+          bytes: await selectedFile.readAsBytes(),
+          name: selectedFile.name,
+          mimeType: selectedFile.mimeType,
+          mediaBatchId: mediaBatchId,
+          clearComposerContext: index == acceptedFiles.length - 1,
+        );
+      }
+
+      if (mounted && skipped > 0) {
+        _showError('$skipped picture(s) larger than 25 MB were not sent.');
+      }
     } catch (_) {
-      if (mounted) _showError('The selected picture could not be read.');
+      if (mounted) {
+        _showError('One or more selected pictures could not be read.');
+      }
     }
   }
 
@@ -1252,14 +1337,18 @@ class _ChatScreenState extends State<ChatScreen> {
     required Uint8List bytes,
     required String name,
     String? mimeType,
+    String? mediaBatchId,
+    bool clearComposerContext = true,
   }) async {
     if (_sendingAttachment) return;
+
     if (bytes.length > ChatClipboard.maximumImageBytes) {
       _showError('Choose a file smaller than 25 MB.');
       return;
     }
 
     setState(() => _sendingAttachment = true);
+
     try {
       final image = await MatrixImageFile.create(
         bytes: bytes,
@@ -1267,8 +1356,10 @@ class _ChatScreenState extends State<ChatScreen> {
         mimeType: mimeType,
         nativeImplementations: widget.room.client.nativeImplementations,
       );
+
       final preserveAnimation =
           isAnimatedGifName(name) || image.mimeType == 'image/gif';
+
       await widget.room.sendFileEvent(
         image,
         inReplyTo: _replyTo,
@@ -1276,15 +1367,21 @@ class _ChatScreenState extends State<ChatScreen> {
         extraContent: {
           messageRecipientsKey: _receiptRecipients(),
           archiveReplyKey: ?_archiveReplyTo?.id,
+          patrickMediaBatchKey: ?mediaBatchId,
         },
       );
-      if (mounted) _cancelComposerContext();
+
+      if (mounted && clearComposerContext) {
+        _cancelComposerContext();
+      }
     } catch (_) {
       if (mounted) {
         _showError('The picture could not be encrypted and sent.');
       }
     } finally {
-      if (mounted) setState(() => _sendingAttachment = false);
+      if (mounted) {
+        setState(() => _sendingAttachment = false);
+      }
     }
   }
 
@@ -2211,7 +2308,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                         duration: const Duration(
                                           milliseconds: 250,
                                         ),
-                                        color: _highlightMessageId == item.id
+                                        color:
+                                            item.containsId(_highlightMessageId)
                                             ? Theme.of(context)
                                                   .colorScheme
                                                   .tertiaryContainer
@@ -2243,7 +2341,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                       duration: const Duration(
                                         milliseconds: 250,
                                       ),
-                                      color: _highlightMessageId == item.id
+                                      color:
+                                          item.containsId(_highlightMessageId)
                                           ? Theme.of(context)
                                                 .colorScheme
                                                 .tertiaryContainer
@@ -2252,6 +2351,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                       child: MessageBubble(
                                         key: ValueKey(event.eventId),
                                         event: event,
+                                        galleryEvents: item.events.reversed
+                                            .toList(growable: false),
                                         timeline: timeline,
                                         mine:
                                             event.senderId ==
@@ -2363,17 +2464,31 @@ class _ChatScreenState extends State<ChatScreen> {
 enum _ArchiveAction { react, reply, edit, copy, forward, info, delete }
 
 class _ChatItem {
-  final Event? event;
+  final List<Event> events;
   final ArchiveMessage? archiveMessage;
 
-  const _ChatItem._({this.event, this.archiveMessage});
+  const _ChatItem._({this.events = const <Event>[], this.archiveMessage});
 
-  factory _ChatItem.matrix(Event event) => _ChatItem._(event: event);
+  factory _ChatItem.matrix(Event event) => _ChatItem._(events: <Event>[event]);
+
   factory _ChatItem.archive(ArchiveMessage message) =>
       _ChatItem._(archiveMessage: message);
 
+  Event? get event => events.isEmpty ? null : events.first;
+
   String get id => event?.eventId ?? archiveMessage!.id;
+
   DateTime get timestamp => event?.originServerTs ?? archiveMessage!.timestamp;
+
+  bool containsId(String? candidate) {
+    if (candidate == null) return false;
+    if (archiveMessage?.id == candidate) return true;
+
+    return events.any((event) => event.eventId == candidate);
+  }
+
+  _ChatItem withAdditionalEvent(Event event) =>
+      _ChatItem._(events: <Event>[...events, event]);
 }
 
 class _InfoRow extends StatelessWidget {

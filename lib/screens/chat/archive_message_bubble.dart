@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import '../../archive/archive_models.dart';
 import '../../archive/archive_repository.dart';
 import 'emoji_style.dart';
+import 'image_gallery_layout.dart';
+import 'swipeable_image_gallery.dart';
 import 'message_status_indicator.dart';
 
 class ArchiveMessageBubble extends StatelessWidget {
@@ -92,15 +94,11 @@ class ArchiveMessageBubble extends StatelessWidget {
                             ),
                           )
                         else ...[
-                          for (final attachment in message.attachments)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: _ArchiveAttachmentView(
-                                archive: archive,
-                                attachment: attachment,
-                                color: textColor,
-                              ),
-                            ),
+                          _ArchiveAttachmentCollection(
+                            archive: archive,
+                            attachments: message.attachments,
+                            color: textColor,
+                          ),
                           if (message.body.isNotEmpty)
                             ColorEmojiText(
                               message.body,
@@ -196,6 +194,169 @@ class _ArchiveReplyPreview extends StatelessWidget {
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
       ),
+    );
+  }
+}
+
+class _ArchiveAttachmentCollection extends StatelessWidget {
+  final ArchiveRoomData archive;
+  final List<ArchiveAttachment> attachments;
+  final Color color;
+
+  const _ArchiveAttachmentCollection({
+    required this.archive,
+    required this.attachments,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final galleryImages = attachments
+        .where((attachment) => attachment.isImage && !attachment.missing)
+        .toList(growable: false);
+
+    final children = <Widget>[];
+    var galleryAdded = false;
+
+    for (final attachment in attachments) {
+      Widget child;
+
+      if (galleryImages.length > 1 &&
+          attachment.isImage &&
+          !attachment.missing) {
+        if (galleryAdded) continue;
+
+        galleryAdded = true;
+        child = _ArchiveImageGallery(
+          archive: archive,
+          attachments: galleryImages,
+          color: color,
+        );
+      } else {
+        child = _ArchiveAttachmentView(
+          archive: archive,
+          attachment: attachment,
+          color: color,
+        );
+      }
+
+      children.add(
+        Padding(padding: const EdgeInsets.only(bottom: 8), child: child),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
+    );
+  }
+}
+
+class _ArchiveImageGallery extends StatelessWidget {
+  final ArchiveRoomData archive;
+  final List<ArchiveAttachment> attachments;
+  final Color color;
+
+  const _ArchiveImageGallery({
+    required this.archive,
+    required this.attachments,
+    required this.color,
+  });
+
+  List<SwipeableGalleryImageLoader> get _imageLoaders => attachments
+      .map<SwipeableGalleryImageLoader>(
+        (attachment) =>
+            () async => SwipeableGalleryImage(
+              bytes: await archive.loadAttachment(attachment),
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+            ),
+      )
+      .toList(growable: false);
+
+  Future<void> _showImages(BuildContext context, int initialIndex) {
+    return showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.9),
+      builder: (_) => SwipeableImageGallery(
+        imageLoaders: _imageLoaders,
+        initialIndex: initialIndex,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final captionedAttachments = attachments
+        .where((attachment) => (attachment.caption ?? '').trim().isNotEmpty)
+        .toList(growable: false);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ImageGalleryLayout(
+          itemCount: attachments.length,
+          onItemTap: (index) => _showImages(context, index),
+          itemBuilder: (context, index) => _ArchiveGalleryImageTile(
+            archive: archive,
+            attachment: attachments[index],
+          ),
+        ),
+        for (final attachment in captionedAttachments) ...[
+          const SizedBox(height: 6),
+          ColorEmojiText(
+            attachment.caption!,
+            maxLines: 4,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: color),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _ArchiveGalleryImageTile extends StatelessWidget {
+  final ArchiveRoomData archive;
+  final ArchiveAttachment attachment;
+
+  const _ArchiveGalleryImageTile({
+    required this.archive,
+    required this.attachment,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Uint8List>(
+      future: archive.loadAttachment(attachment),
+      builder: (context, snapshot) {
+        final bytes = snapshot.data;
+
+        if (bytes != null) {
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: SizedBox.expand(
+              child: Image.memory(
+                bytes,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+              ),
+            ),
+          );
+        }
+
+        if (snapshot.hasError) {
+          return const SizedBox.expand(
+            child: Center(
+              child: Text('Picture unavailable', textAlign: TextAlign.center),
+            ),
+          );
+        }
+
+        return const SizedBox.expand(
+          child: Center(child: CircularProgressIndicator()),
+        );
+      },
     );
   }
 }

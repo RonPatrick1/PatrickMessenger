@@ -24,12 +24,15 @@ import '../../services/media_save_service.dart';
 import '../../services/streaming_encrypted_video_playback.dart';
 import 'emoji_picker_dialog.dart';
 import 'emoji_style.dart';
+import 'image_gallery_layout.dart';
+import 'swipeable_image_gallery.dart';
 import 'liam_icon.dart';
 import 'message_interactions.dart';
 import 'message_status_indicator.dart';
 
 class MessageBubble extends StatefulWidget {
   final Event event;
+  final List<Event> galleryEvents;
   final Timeline timeline;
   final bool mine;
   final bool selectionMode;
@@ -46,6 +49,7 @@ class MessageBubble extends StatefulWidget {
 
   const MessageBubble({
     required this.event,
+    this.galleryEvents = const <Event>[],
     required this.timeline,
     required this.mine,
     required this.selectionMode,
@@ -82,6 +86,9 @@ class _MessageBubbleState extends State<MessageBubble> {
   @override
   Widget build(BuildContext context) {
     final event = widget.event;
+    final galleryEvents = widget.galleryEvents.isEmpty
+        ? <Event>[event]
+        : widget.galleryEvents;
     final timeline = widget.timeline;
     final mine = widget.mine;
     final selectionMode = widget.selectionMode;
@@ -149,6 +156,7 @@ class _MessageBubbleState extends State<MessageBubble> {
             ),
             _MessageContent(
               event: displayEvent,
+              imageEvents: galleryEvents,
               textColor: textColor,
               liamUserId: liamUserId,
             ),
@@ -637,11 +645,13 @@ class _HoverQuickActions extends StatelessWidget {
 
 class _MessageContent extends StatelessWidget {
   final Event event;
+  final List<Event> imageEvents;
   final Color textColor;
   final String liamUserId;
 
   const _MessageContent({
     required this.event,
+    this.imageEvents = const <Event>[],
     required this.textColor,
     required this.liamUserId,
   });
@@ -653,8 +663,10 @@ class _MessageContent extends StatelessWidget {
     // "Liam" heading treatment — checking that before the message-type
     // switch would swallow Liam's images into a plain text bubble instead.
     return switch (event.messageType) {
-      MessageTypes.Image ||
-      MessageTypes.Sticker => _EncryptedImage(event: event),
+      MessageTypes.Image || MessageTypes.Sticker =>
+        imageEvents.length > 1
+            ? _EncryptedImageGallery(events: imageEvents)
+            : _EncryptedImage(event: event),
       MessageTypes.Video => _EncryptedVideo(event: event),
       MessageTypes.File || MessageTypes.Audio => _EncryptedAttachment(
         event: event,
@@ -835,10 +847,60 @@ class _LiamAnswerContent extends StatelessWidget {
   }
 }
 
+class _EncryptedImageGallery extends StatelessWidget {
+  final List<Event> events;
+
+  const _EncryptedImageGallery({required this.events});
+
+  List<SwipeableGalleryImageLoader> get _imageLoaders => events
+      .map<SwipeableGalleryImageLoader>(
+        (event) => () async {
+          final file = await event.downloadAndDecryptAttachment();
+
+          return SwipeableGalleryImage(
+            bytes: file.bytes,
+            name: file.name,
+            mimeType: file.mimeType,
+          );
+        },
+      )
+      .toList(growable: false);
+
+  Future<void> _showImages(BuildContext context, int initialIndex) {
+    return showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.9),
+      builder: (_) => SwipeableImageGallery(
+        imageLoaders: _imageLoaders,
+        initialIndex: initialIndex,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ImageGalleryLayout(
+      itemCount: events.length,
+      onItemTap: (index) => _showImages(context, index),
+      itemBuilder: (context, index) => _EncryptedImage(
+        event: events[index],
+        compact: true,
+        interactive: false,
+      ),
+    );
+  }
+}
+
 class _EncryptedImage extends StatefulWidget {
   final Event event;
+  final bool compact;
+  final bool interactive;
 
-  const _EncryptedImage({required this.event});
+  const _EncryptedImage({
+    required this.event,
+    this.compact = false,
+    this.interactive = true,
+  });
 
   @override
   State<_EncryptedImage> createState() => _EncryptedImageState();
@@ -857,240 +919,79 @@ class _EncryptedImageState extends State<_EncryptedImage> {
     }
   }
 
+  Widget _placeholder(Widget child) {
+    if (widget.compact) {
+      return SizedBox.expand(child: Center(child: child));
+    }
+
+    return SizedBox(width: 220, height: 110, child: Center(child: child));
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<MatrixFile>(
       future: _thumbnail,
       builder: (context, snapshot) {
         final file = snapshot.data;
+
         if (file != null) {
+          final image = ClipRRect(
+            borderRadius: BorderRadius.circular(widget.compact ? 8 : 12),
+            child: widget.compact
+                ? SizedBox.expand(
+                    child: Image.memory(
+                      file.bytes,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                    ),
+                  )
+                : Image.memory(
+                    file.bytes,
+                    width: 280,
+                    height: 210,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  ),
+          );
+
+          if (!widget.interactive) return image;
+
           return Semantics(
             button: true,
             label: 'Open encrypted picture or GIF',
             child: GestureDetector(
               onTap: () => _showFullImage(context),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.memory(
-                  file.bytes,
-                  width: 280,
-                  height: 210,
-                  fit: BoxFit.cover,
-                  gaplessPlayback: true,
-                ),
-              ),
+              child: image,
             ),
           );
         }
+
         if (snapshot.hasError) {
-          return const SizedBox(
-            width: 220,
-            height: 110,
-            child: Center(child: Text('Picture unavailable')),
+          return _placeholder(
+            const Text('Picture unavailable', textAlign: TextAlign.center),
           );
         }
-        return const SizedBox(
-          width: 220,
-          height: 110,
-          child: Center(child: CircularProgressIndicator()),
-        );
+
+        return _placeholder(const CircularProgressIndicator());
       },
     );
   }
 
-  Future<void> _showFullImage(BuildContext context) async {
-    showDialog<void>(
+  Future<void> _showFullImage(BuildContext context) {
+    return showDialog<void>(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.9),
-      builder: (context) => _FullImageDialog(event: widget.event),
-    );
-  }
-}
+      builder: (_) => SwipeableImageGallery(
+        imageLoaders: [
+          () async {
+            final file = await widget.event.downloadAndDecryptAttachment();
 
-class _FullImageDialog extends StatefulWidget {
-  final Event event;
-
-  const _FullImageDialog({required this.event});
-
-  @override
-  State<_FullImageDialog> createState() => _FullImageDialogState();
-}
-
-class _FullImageDialogState extends State<_FullImageDialog> {
-  late final Future<MatrixFile> _image = widget.event
-      .downloadAndDecryptAttachment();
-  bool _saving = false;
-  bool _saved = false;
-  String? _saveStatus;
-  Timer? _saveStatusTimer;
-
-  @override
-  void dispose() {
-    _saveStatusTimer?.cancel();
-    super.dispose();
-  }
-
-  void _dismissSaveStatusSoon() {
-    _saveStatusTimer?.cancel();
-    _saveStatusTimer = Timer(const Duration(seconds: 3), () {
-      if (mounted) setState(() => _saveStatus = null);
-    });
-  }
-
-  Future<void> _save() async {
-    if (_saving || _saved) return;
-    _saveStatusTimer?.cancel();
-    setState(() {
-      _saving = true;
-      _saveStatus = 'Downloading and saving picture…';
-    });
-    try {
-      final image = await _image;
-      final result = await MediaSaveService.saveImage(
-        bytes: image.bytes,
-        name: image.name,
-        mimeType: image.mimeType,
-      );
-      if (mounted) {
-        setState(() {
-          _saved = result != null;
-          _saveStatus = result?.message ?? 'Save canceled.';
-        });
-        _dismissSaveStatusSoon();
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() => _saveStatus = 'The picture could not be saved.');
-        _dismissSaveStatusSoon();
-      }
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final pictureControlStyle = IconButton.styleFrom(
-      backgroundColor: colors.primaryContainer,
-      foregroundColor: colors.onPrimaryContainer,
-      disabledBackgroundColor: colors.primaryContainer.withValues(alpha: 0.55),
-      disabledForegroundColor: colors.onPrimaryContainer.withValues(
-        alpha: 0.55,
-      ),
-    );
-    return Dialog.fullscreen(
-      backgroundColor: Colors.black,
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: FutureBuilder<MatrixFile>(
-              future: _image,
-              builder: (context, snapshot) {
-                final file = snapshot.data;
-                if (file != null) {
-                  return InteractiveViewer(
-                    minScale: 0.8,
-                    maxScale: 5,
-                    child: Center(
-                      child: Image.memory(file.bytes, gaplessPlayback: true),
-                    ),
-                  );
-                }
-                if (snapshot.hasError) {
-                  return const Center(
-                    child: Text(
-                      'Picture unavailable',
-                      style: TextStyle(color: Colors.white),
-                    ),
-                  );
-                }
-                return const Center(child: CircularProgressIndicator());
-              },
-            ),
-          ),
-          SafeArea(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                IconButton.filled(
-                  onPressed: () => Navigator.pop(context),
-                  style: pictureControlStyle,
-                  icon: const Icon(Icons.close),
-                  tooltip: 'Close',
-                ),
-                IconButton.filled(
-                  onPressed: _saving || _saved ? null : _save,
-                  style: pictureControlStyle,
-                  icon: _saved
-                      ? const Icon(Icons.check)
-                      : _saving
-                      ? SizedBox.square(
-                          dimension: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: colors.onPrimaryContainer,
-                          ),
-                        )
-                      : const Icon(Icons.download),
-                  tooltip: _saved ? 'Picture saved' : 'Save picture',
-                ),
-              ],
-            ),
-          ),
-          if (_saveStatus != null)
-            Positioned(
-              left: 24,
-              right: 24,
-              bottom: 20,
-              child: SafeArea(
-                top: false,
-                child: Center(
-                  child: Material(
-                    color: colors.primaryContainer,
-                    elevation: 6,
-                    borderRadius: BorderRadius.circular(18),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 18,
-                        vertical: 12,
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (_saving) ...[
-                            SizedBox.square(
-                              dimension: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: colors.onPrimaryContainer,
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                          ] else if (_saved) ...[
-                            Icon(
-                              Icons.check_circle,
-                              size: 20,
-                              color: colors.onPrimaryContainer,
-                            ),
-                            const SizedBox(width: 8),
-                          ],
-                          Flexible(
-                            child: Text(
-                              _saveStatus!,
-                              style: TextStyle(
-                                color: colors.onPrimaryContainer,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
+            return SwipeableGalleryImage(
+              bytes: file.bytes,
+              name: file.name,
+              mimeType: file.mimeType,
+            );
+          },
         ],
       ),
     );
