@@ -1,7 +1,5 @@
 import 'package:matrix/matrix.dart';
 
-const minimumAccountPasswordLength = 8;
-
 String? validatePasswordChange({
   required String currentPassword,
   required String newPassword,
@@ -12,9 +10,6 @@ String? validatePasswordChange({
   }
   if (newPassword.isEmpty) {
     return 'Enter a new password.';
-  }
-  if (newPassword.length < minimumAccountPasswordLength) {
-    return 'Use at least $minimumAccountPasswordLength characters.';
   }
   if (newPassword != confirmation) {
     return 'The new passwords do not match.';

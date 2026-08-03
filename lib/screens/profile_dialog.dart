@@ -464,8 +464,6 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
                   textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(
                     labelText: 'New password',
-                    helperText:
-                        'Use at least $minimumAccountPasswordLength characters.',
                     prefixIcon: Icon(Icons.key_outlined),
                   ),
                 ),

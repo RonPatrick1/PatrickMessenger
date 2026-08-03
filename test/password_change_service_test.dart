@@ -18,14 +18,22 @@ void main() {
       );
     });
 
-    test('requires a new password of at least eight characters', () {
+    test('requires a new password but does not enforce complexity', () {
       expect(
         validatePasswordChange(
           currentPassword: 'temporary',
-          newPassword: 'short',
-          confirmation: 'short',
+          newPassword: '',
+          confirmation: '',
         ),
-        'Use at least 8 characters.',
+        'Enter a new password.',
+      );
+      expect(
+        validatePasswordChange(
+          currentPassword: 'temporary',
+          newPassword: 'x',
+          confirmation: 'x',
+        ),
+        isNull,
       );
     });
 
