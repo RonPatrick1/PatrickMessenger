@@ -132,14 +132,17 @@ user has permission to redact. On iPhone and Android this menu opens as a
 touch-friendly bottom sheet.
 
 Use **Account settings** in the account menu on the Messages screen to set the
-display name and this device's notification choices. Notifications and the
-system default sound can each be enabled or disabled. Message previews default
-to off, so a lock screen says only that a new encrypted message arrived; turn
-previews on to include the readable sender and message text. **Notify after
-reading elsewhere** controls whether this device still alerts after another
-client has advanced the account's read marker. **Send test
-notification** requests the phone's OS permission when needed and verifies the
-current sound choice.
+display name, change the Matrix account password, and set this device's
+notification choices. A user can sign in with the temporary password supplied
+when the account was created, then replace it without disclosing the new
+password to the server administrator. Other signed-in Patrick Messenger
+devices remain connected. Notifications and the system default sound can each
+be enabled or disabled. Message previews default to off, so a lock screen says
+only that a new encrypted message arrived; turn previews on to include the
+readable sender and message text. **Notify after reading elsewhere** controls
+whether this device still alerts after another client has advanced the
+account's read marker. **Send test notification** requests the phone's OS
+permission when needed and verifies the current sound choice.
 
 Read receipts are enabled by default and can be disabled in the same Account
 settings dialog. Sent messages use one circled check, delivered messages use

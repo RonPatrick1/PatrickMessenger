@@ -73,6 +73,8 @@ Olm/Megolm support. Vodozemac provides the cryptographic implementation.
 The client currently:
 
 - initializes Vodozemac before restoring a Matrix session;
+- lets an authenticated user replace a temporary or current account password
+  without revoking the sessions on their other Patrick Messenger devices;
 - creates encrypted rooms with Matrix federation disabled;
 - refuses to open unencrypted rooms;
 - encrypts picture and animated GIF data before upload;

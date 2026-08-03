@@ -19,8 +19,22 @@ import Vision
       didFinishLaunchingWithOptions: launchOptions
     )
     UNUserNotificationCenter.current().delegate = self as UNUserNotificationCenterDelegate
+    clearApplicationBadge(application)
     application.registerForRemoteNotifications()
     return result
+  }
+
+  override func applicationDidBecomeActive(_ application: UIApplication) {
+    super.applicationDidBecomeActive(application)
+    clearApplicationBadge(application)
+  }
+
+  private func clearApplicationBadge(_ application: UIApplication) {
+    if #available(iOS 16.0, *) {
+      UNUserNotificationCenter.current().setBadgeCount(0)
+    } else {
+      application.applicationIconBadgeNumber = 0
+    }
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {

@@ -9,6 +9,22 @@ import 'package:matrix/matrix.dart';
 
 import 'notification_preferences.dart';
 
+Map<String, Object?> buildIosPushApsPayload({required bool soundEnabled}) {
+  return <String, Object?>{
+    'mutable-content': 1,
+    'content-available': 1,
+    // Sygnal replaces this fallback with the Matrix unread count when the
+    // homeserver includes one. Keeping a nonzero fallback ensures APNs can
+    // still badge event-only notifications that omit counts.
+    'badge': 1,
+    'alert': <String, Object?>{
+      'title': 'Patrick Messenger',
+      'body': 'New encrypted message',
+    },
+    if (soundEnabled) 'sound': 'default',
+  };
+}
+
 class IosPushService {
   static const _channel = MethodChannel(
     'com.patricklamphier.patrickMessenger/apns',
@@ -81,15 +97,9 @@ class IosPushService {
         return;
       }
 
-      final aps = <String, Object?>{
-        'mutable-content': 1,
-        'content-available': 1,
-        'alert': <String, Object?>{
-          'title': 'Patrick Messenger',
-          'body': 'New encrypted message',
-        },
-        if (_preferences.soundEnabled) 'sound': 'default',
-      };
+      final aps = buildIosPushApsPayload(
+        soundEnabled: _preferences.soundEnabled,
+      );
       await _client.postPusher(
         Pusher(
           appId: _appId,

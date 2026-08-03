@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart';
 
+import '../account/password_change_service.dart';
 import '../matrix/display_names.dart';
 import '../notifications/message_notification_service.dart';
 import '../notifications/notification_preferences.dart';
@@ -140,6 +141,22 @@ class _AccountSettingsDialogState extends State<_AccountSettingsDialog> {
     }
   }
 
+  Future<void> _changePassword() async {
+    final changed = await showDialog<bool>(
+      context: context,
+      builder: (context) => _ChangePasswordDialog(client: widget.client),
+    );
+    if (changed == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Password changed. Your other signed-in devices remain connected.',
+          ),
+        ),
+      );
+    }
+  }
+
   Future<void> _save() async {
     final name = _controller.text.trim();
     if (name.isEmpty) {
@@ -210,6 +227,18 @@ class _AccountSettingsDialogState extends State<_AccountSettingsDialog> {
               ),
               Text(widget.userId, style: Theme.of(context).textTheme.bodySmall),
               const SizedBox(height: 20),
+              const Divider(),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.password_outlined),
+                title: const Text('Change password'),
+                subtitle: const Text(
+                  'Replace a temporary or current password with one only you know.',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                enabled: !busy,
+                onTap: busy ? null : _changePassword,
+              ),
               const Divider(),
               SwitchListTile.adaptive(
                 contentPadding: EdgeInsets.zero,
@@ -322,6 +351,184 @@ class _AccountSettingsDialogState extends State<_AccountSettingsDialog> {
         FilledButton(
           onPressed: busy ? null : _save,
           child: Text(_saving ? 'Saving…' : 'Save'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ChangePasswordDialog extends StatefulWidget {
+  final Client client;
+
+  const _ChangePasswordDialog({required this.client});
+
+  @override
+  State<_ChangePasswordDialog> createState() => _ChangePasswordDialogState();
+}
+
+class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
+  final _currentPasswordController = TextEditingController();
+  final _newPasswordController = TextEditingController();
+  final _confirmationController = TextEditingController();
+  bool _obscurePasswords = true;
+  bool _submitting = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _currentPasswordController.clear();
+    _newPasswordController.clear();
+    _confirmationController.clear();
+    _currentPasswordController.dispose();
+    _newPasswordController.dispose();
+    _confirmationController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final currentPassword = _currentPasswordController.text;
+    final newPassword = _newPasswordController.text;
+    final validationError = validatePasswordChange(
+      currentPassword: currentPassword,
+      newPassword: newPassword,
+      confirmation: _confirmationController.text,
+    );
+    if (validationError != null) {
+      setState(() => _error = validationError);
+      return;
+    }
+
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    try {
+      await changeOwnPassword(
+        client: widget.client,
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+      );
+      _currentPasswordController.clear();
+      _newPasswordController.clear();
+      _confirmationController.clear();
+      if (mounted) Navigator.pop(context, true);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _error = passwordChangeErrorMessage(error));
+      }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      icon: const Icon(Icons.password_outlined),
+      title: const Text('Change password'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 440),
+        child: SingleChildScrollView(
+          child: AutofillGroup(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Enter the temporary or current password you used to sign '
+                  'in, then choose a private replacement.',
+                ),
+                const SizedBox(height: 18),
+                TextField(
+                  controller: _currentPasswordController,
+                  autofocus: true,
+                  enabled: !_submitting,
+                  obscureText: _obscurePasswords,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  autofillHints: const [AutofillHints.password],
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'Current password',
+                    prefixIcon: Icon(Icons.lock_outline),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _newPasswordController,
+                  enabled: !_submitting,
+                  obscureText: _obscurePasswords,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  autofillHints: const [AutofillHints.newPassword],
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'New password',
+                    helperText:
+                        'Use at least $minimumAccountPasswordLength characters.',
+                    prefixIcon: Icon(Icons.key_outlined),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _confirmationController,
+                  enabled: !_submitting,
+                  obscureText: _obscurePasswords,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  autofillHints: const [AutofillHints.newPassword],
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => _submit(),
+                  decoration: const InputDecoration(
+                    labelText: 'Confirm new password',
+                    prefixIcon: Icon(Icons.key_outlined),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: _submitting
+                        ? null
+                        : () => setState(
+                            () => _obscurePasswords = !_obscurePasswords,
+                          ),
+                    icon: Icon(
+                      _obscurePasswords
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                    ),
+                    label: Text(
+                      _obscurePasswords ? 'Show passwords' : 'Hide passwords',
+                    ),
+                  ),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    _error!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _submitting ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _submitting ? null : _submit,
+          child: _submitting
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Change password'),
         ),
       ],
     );
