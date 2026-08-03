@@ -200,41 +200,18 @@ class _SwipeableImageGalleryState extends State<SwipeableImageGallery> {
       child: Focus(
         autofocus: true,
         onKeyEvent: _onKey,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: Listener(
-                onPointerSignal: _onWheel,
-                child: ScrollConfiguration(
-                  behavior: const _GalleryScrollBehavior(),
-                  child: PageView.builder(
-                    key: const ValueKey('swipeable-gallery-page-view'),
-                    controller: _controller,
-                    physics: _zoomMode
-                        ? const NeverScrollableScrollPhysics()
-                        : const PageScrollPhysics(),
-                    itemCount: _images.length,
-                    onPageChanged: (index) {
-                      setState(() {
-                        _index = index;
-                        _zoomMode = false;
-                        _status = null;
-                      });
-                    },
-                    itemBuilder: (context, index) => _page(index),
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              left: 0,
-              top: 0,
-              right: 0,
-              child: SafeArea(
+        child: SafeArea(
+          child: Column(
+            children: [
+              Material(
+                key: const ValueKey('swipeable-gallery-toolbar'),
+                color: const Color(0xFF111111),
                 child: Padding(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       IconButton.filled(
                         onPressed: () => Navigator.pop(context),
@@ -242,11 +219,22 @@ class _SwipeableImageGalleryState extends State<SwipeableImageGallery> {
                         icon: const Icon(Icons.close),
                         tooltip: 'Close',
                       ),
+                      if (_desktop) ...[
+                        const SizedBox(width: 6),
+                        IconButton.filled(
+                          onPressed: _zoomMode || _index == 0
+                              ? null
+                              : () => _go(_index - 1),
+                          style: controlStyle,
+                          icon: const Icon(Icons.chevron_left),
+                          tooltip: 'Previous picture',
+                        ),
+                      ],
                       Expanded(
                         child: Center(
                           child: DecoratedBox(
                             decoration: BoxDecoration(
-                              color: Colors.black54,
+                              color: Colors.white12,
                               borderRadius: BorderRadius.circular(18),
                             ),
                             child: Padding(
@@ -265,6 +253,17 @@ class _SwipeableImageGalleryState extends State<SwipeableImageGallery> {
                           ),
                         ),
                       ),
+                      if (_desktop) ...[
+                        IconButton.filled(
+                          onPressed: _zoomMode || _index == _images.length - 1
+                              ? null
+                              : () => _go(_index + 1),
+                          style: controlStyle,
+                          icon: const Icon(Icons.chevron_right),
+                          tooltip: 'Next picture',
+                        ),
+                        const SizedBox(width: 6),
+                      ],
                       IconButton.filled(
                         onPressed: () {
                           setState(() => _zoomMode = !_zoomMode);
@@ -295,58 +294,59 @@ class _SwipeableImageGalleryState extends State<SwipeableImageGallery> {
                   ),
                 ),
               ),
-            ),
-            if (_desktop && _index > 0)
-              Positioned(
-                left: 12,
-                top: 0,
-                bottom: 0,
-                child: Center(
-                  child: IconButton.filled(
-                    onPressed: _zoomMode ? null : () => _go(_index - 1),
-                    style: controlStyle,
-                    icon: const Icon(Icons.chevron_left),
-                    tooltip: 'Previous picture',
-                  ),
-                ),
-              ),
-            if (_desktop && _index < _images.length - 1)
-              Positioned(
-                right: 12,
-                top: 0,
-                bottom: 0,
-                child: Center(
-                  child: IconButton.filled(
-                    onPressed: _zoomMode ? null : () => _go(_index + 1),
-                    style: controlStyle,
-                    icon: const Icon(Icons.chevron_right),
-                    tooltip: 'Next picture',
-                  ),
-                ),
-              ),
-            if (_status != null)
-              Positioned(
-                left: 24,
-                right: 24,
-                bottom: 20,
-                child: SafeArea(
-                  top: false,
-                  child: Center(
-                    child: Material(
-                      color: colors.primaryContainer,
-                      borderRadius: BorderRadius.circular(18),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 18,
-                          vertical: 12,
+              const Divider(height: 1, color: Colors.white24),
+              Expanded(
+                child: Stack(
+                  key: const ValueKey('swipeable-gallery-image-viewport'),
+                  children: [
+                    Positioned.fill(
+                      child: Listener(
+                        onPointerSignal: _onWheel,
+                        child: ScrollConfiguration(
+                          behavior: const _GalleryScrollBehavior(),
+                          child: PageView.builder(
+                            key: const ValueKey('swipeable-gallery-page-view'),
+                            controller: _controller,
+                            physics: _zoomMode
+                                ? const NeverScrollableScrollPhysics()
+                                : const PageScrollPhysics(),
+                            itemCount: _images.length,
+                            onPageChanged: (index) {
+                              setState(() {
+                                _index = index;
+                                _zoomMode = false;
+                                _status = null;
+                              });
+                            },
+                            itemBuilder: (context, index) => _page(index),
+                          ),
                         ),
-                        child: Text(_status!),
                       ),
                     ),
-                  ),
+                    if (_status != null)
+                      Positioned(
+                        left: 24,
+                        right: 24,
+                        bottom: 20,
+                        child: Center(
+                          child: Material(
+                            color: colors.primaryContainer,
+                            borderRadius: BorderRadius.circular(18),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 18,
+                                vertical: 12,
+                              ),
+                              child: Text(_status!),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
-          ],
+            ],
+          ),
         ),
       ),
     );

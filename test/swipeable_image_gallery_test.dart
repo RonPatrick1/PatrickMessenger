@@ -53,26 +53,41 @@ void main() {
     expect(find.text('2 of 3'), findsOneWidget);
   });
 
-  testWidgets('top controls stay above the picture center', (tester) async {
+  testWidgets('toolbar controls never overlap the picture viewport', (
+    tester,
+  ) async {
     await tester.pumpWidget(viewer());
     await tester.pumpAndSettle();
 
     final pageView = find.byKey(const ValueKey('swipeable-gallery-page-view'));
     final pageBounds = tester.getRect(pageView);
-    final upperLimit = pageBounds.top + pageBounds.height * 0.25;
 
-    expect(
-      tester.getRect(find.byTooltip('Close')).center.dy,
-      lessThan(upperLimit),
+    for (final control in [
+      find.byTooltip('Close'),
+      find.text('1 of 3'),
+      find.byTooltip('Enable zoom'),
+      find.byTooltip('Save picture'),
+    ]) {
+      expect(tester.getRect(control).bottom, lessThanOrEqualTo(pageBounds.top));
+    }
+  });
+
+  testWidgets('desktop navigation controls stay in the toolbar', (
+    tester,
+  ) async {
+    await tester.pumpWidget(viewer(initialIndex: 1, desktop: true));
+    await tester.pumpAndSettle();
+
+    final pageBounds = tester.getRect(
+      find.byKey(const ValueKey('swipeable-gallery-page-view')),
     );
-    expect(tester.getRect(find.text('1 of 3')).center.dy, lessThan(upperLimit));
     expect(
-      tester.getRect(find.byTooltip('Enable zoom')).center.dy,
-      lessThan(upperLimit),
+      tester.getRect(find.byTooltip('Previous picture')).bottom,
+      lessThanOrEqualTo(pageBounds.top),
     );
     expect(
-      tester.getRect(find.byTooltip('Save picture')).center.dy,
-      lessThan(upperLimit),
+      tester.getRect(find.byTooltip('Next picture')).bottom,
+      lessThanOrEqualTo(pageBounds.top),
     );
   });
 
