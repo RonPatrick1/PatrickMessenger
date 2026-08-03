@@ -226,65 +226,73 @@ class _SwipeableImageGalleryState extends State<SwipeableImageGallery> {
                 ),
               ),
             ),
-            SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    IconButton.filled(
-                      onPressed: () => Navigator.pop(context),
-                      style: controlStyle,
-                      icon: const Icon(Icons.close),
-                      tooltip: 'Close',
-                    ),
-                    Expanded(
-                      child: Center(
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 8,
+            Positioned(
+              left: 0,
+              top: 0,
+              right: 0,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      IconButton.filled(
+                        onPressed: () => Navigator.pop(context),
+                        style: controlStyle,
+                        icon: const Icon(Icons.close),
+                        tooltip: 'Close',
+                      ),
+                      Expanded(
+                        child: Center(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(18),
                             ),
-                            child: Text(
-                              '${_index + 1} of ${_images.length}',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w700,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 8,
+                              ),
+                              child: Text(
+                                '${_index + 1} of ${_images.length}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                    IconButton.filled(
-                      onPressed: () {
-                        setState(() => _zoomMode = !_zoomMode);
-                      },
-                      style: controlStyle,
-                      icon: Icon(
-                        _zoomMode ? Icons.zoom_out_map : Icons.zoom_in,
+                      IconButton.filled(
+                        onPressed: () {
+                          setState(() => _zoomMode = !_zoomMode);
+                        },
+                        style: controlStyle,
+                        icon: Icon(
+                          _zoomMode ? Icons.zoom_out_map : Icons.zoom_in,
+                        ),
+                        tooltip: _zoomMode ? 'Exit zoom' : 'Enable zoom',
                       ),
-                      tooltip: _zoomMode ? 'Exit zoom' : 'Enable zoom',
-                    ),
-                    const SizedBox(width: 6),
-                    IconButton.filled(
-                      onPressed: _saving || saved ? null : _save,
-                      style: controlStyle,
-                      icon: saved
-                          ? const Icon(Icons.check)
-                          : _saving
-                          ? const SizedBox.square(
-                              dimension: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.download),
-                      tooltip: saved ? 'Picture saved' : 'Save picture',
-                    ),
-                  ],
+                      const SizedBox(width: 6),
+                      IconButton.filled(
+                        onPressed: _saving || saved ? null : _save,
+                        style: controlStyle,
+                        icon: saved
+                            ? const Icon(Icons.check)
+                            : _saving
+                            ? const SizedBox.square(
+                                dimension: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.download),
+                        tooltip: saved ? 'Picture saved' : 'Save picture',
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

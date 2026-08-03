@@ -53,6 +53,29 @@ void main() {
     expect(find.text('2 of 3'), findsOneWidget);
   });
 
+  testWidgets('top controls stay above the picture center', (tester) async {
+    await tester.pumpWidget(viewer());
+    await tester.pumpAndSettle();
+
+    final pageView = find.byKey(const ValueKey('swipeable-gallery-page-view'));
+    final pageBounds = tester.getRect(pageView);
+    final upperLimit = pageBounds.top + pageBounds.height * 0.25;
+
+    expect(
+      tester.getRect(find.byTooltip('Close')).center.dy,
+      lessThan(upperLimit),
+    );
+    expect(tester.getRect(find.text('1 of 3')).center.dy, lessThan(upperLimit));
+    expect(
+      tester.getRect(find.byTooltip('Enable zoom')).center.dy,
+      lessThan(upperLimit),
+    );
+    expect(
+      tester.getRect(find.byTooltip('Save picture')).center.dy,
+      lessThan(upperLimit),
+    );
+  });
+
   testWidgets('zoom mode uses InteractiveViewer', (tester) async {
     await tester.pumpWidget(viewer());
     await tester.pumpAndSettle();

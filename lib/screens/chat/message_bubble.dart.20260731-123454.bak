@@ -1,0 +1,1522 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:matrix/matrix.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
+import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart' as sharing;
+
+import '../../archive/archive_contract.dart';
+import '../../archive/archive_repository.dart';
+import '../../matrix/display_names.dart';
+import '../../receipts/message_receipt_service.dart';
+import '../../services/offset_aes_ctr.dart';
+import '../../services/media_save_service.dart';
+import '../../services/streaming_encrypted_video_playback.dart';
+import 'emoji_picker_dialog.dart';
+import 'emoji_style.dart';
+import 'liam_icon.dart';
+import 'message_interactions.dart';
+import 'message_status_indicator.dart';
+
+class MessageBubble extends StatefulWidget {
+  final Event event;
+  final Timeline timeline;
+  final bool mine;
+  final bool selectionMode;
+  final bool selected;
+  final bool pinned;
+  final bool actionsEnabled;
+  final String liamUserId;
+  final VoidCallback onOpenActions;
+  final VoidCallback onSelectionTap;
+  final ValueChanged<String> onReaction;
+  final VoidCallback onReply;
+  final MessageReceiptService receiptService;
+  final ArchiveRoomData archive;
+
+  const MessageBubble({
+    required this.event,
+    required this.timeline,
+    required this.mine,
+    required this.selectionMode,
+    required this.selected,
+    required this.pinned,
+    required this.actionsEnabled,
+    required this.liamUserId,
+    required this.onOpenActions,
+    required this.onSelectionTap,
+    required this.onReaction,
+    required this.onReply,
+    required this.receiptService,
+    required this.archive,
+    super.key,
+  });
+
+  @override
+  State<MessageBubble> createState() => _MessageBubbleState();
+}
+
+class _MessageBubbleState extends State<MessageBubble> {
+  bool get _hoverCapable =>
+      defaultTargetPlatform == TargetPlatform.linux ||
+      defaultTargetPlatform == TargetPlatform.macOS ||
+      defaultTargetPlatform == TargetPlatform.windows;
+
+  bool _hovering = false;
+
+  void _setHovering(bool value) {
+    if (_hovering == value) return;
+    setState(() => _hovering = value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final event = widget.event;
+    final timeline = widget.timeline;
+    final mine = widget.mine;
+    final selectionMode = widget.selectionMode;
+    final selected = widget.selected;
+    final pinned = widget.pinned;
+    final actionsEnabled = widget.actionsEnabled;
+    final liamUserId = widget.liamUserId;
+    final onOpenActions = widget.onOpenActions;
+    final onSelectionTap = widget.onSelectionTap;
+    final onReaction = widget.onReaction;
+    final onReply = widget.onReply;
+    final receiptService = widget.receiptService;
+    final archive = widget.archive;
+
+    final displayEvent = event.getDisplayEvent(timeline);
+    final liamAnswer = isLiamAnswer(displayEvent, liamUserId: liamUserId);
+    final colors = Theme.of(context).colorScheme;
+    final time = TimeOfDay.fromDateTime(event.originServerTs).format(context);
+    final bubbleColor = selected
+        ? colors.tertiaryContainer
+        : mine
+        ? colors.primaryContainer
+        : colors.surfaceContainerHigh;
+    final textColor = selected
+        ? colors.onTertiaryContainer
+        : mine
+        ? colors.onPrimaryContainer
+        : colors.onSurfaceVariant;
+    final edited = event.hasAggregatedEvents(timeline, RelationshipTypes.edit);
+    final groups = groupedReactions(event, timeline, event.room.client.userID);
+    final showToolbar = _hovering && actionsEnabled && !selectionMode;
+
+    final bubble = DecoratedBox(
+      decoration: BoxDecoration(
+        color: bubbleColor,
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(18),
+          topRight: const Radius.circular(18),
+          bottomLeft: Radius.circular(mine ? 18 : 5),
+          bottomRight: Radius.circular(mine ? 5 : 18),
+        ),
+        border: selected ? Border.all(color: colors.tertiary, width: 2) : null,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!mine && !liamAnswer)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 5),
+                child: Text(
+                  readableMatrixUserName(event.senderFromMemoryOrFallback),
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: colors.primary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            _ReplyPreview(
+              event: event,
+              timeline: timeline,
+              textColor: textColor,
+              archive: archive,
+            ),
+            _MessageContent(
+              event: displayEvent,
+              textColor: textColor,
+              liamUserId: liamUserId,
+            ),
+            const SizedBox(height: 4),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (pinned) ...[
+                  Icon(
+                    Icons.push_pin,
+                    size: 13,
+                    color: textColor.withValues(alpha: 0.7),
+                  ),
+                  const SizedBox(width: 4),
+                ],
+                if (edited) ...[
+                  Text(
+                    'edited',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: textColor.withValues(alpha: 0.7),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                ],
+                Text(
+                  time,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: textColor.withValues(alpha: 0.7),
+                  ),
+                ),
+                if (mine) ...[
+                  const SizedBox(width: 4),
+                  ListenableBuilder(
+                    listenable: receiptService,
+                    builder: (context, _) => MessageStatusIndicator(
+                      summary: receiptService.summary(event),
+                      color: textColor.withValues(alpha: 0.75),
+                    ),
+                  ),
+                ],
+                if (!selectionMode && actionsEnabled) ...[
+                  const SizedBox(width: 2),
+                  IconButton(
+                    onPressed: onOpenActions,
+                    tooltip:
+                        'Message actions: reply, edit, '
+                        'delete, and more',
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints.tightFor(
+                      width: 30,
+                      height: 26,
+                    ),
+                    icon: Icon(
+                      Icons.more_horiz,
+                      size: 19,
+                      color: textColor.withValues(alpha: 0.8),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final bubbleWithBadges = Stack(
+      clipBehavior: Clip.none,
+      children: [
+        bubble,
+        if (groups.isNotEmpty)
+          Positioned(
+            bottom: -11,
+            left: mine ? 6 : null,
+            right: mine ? null : 6,
+            child: _ReactionBadges(groups: groups, onReaction: onReaction),
+          ),
+      ],
+    );
+
+    // Desktop permanently reserves the quick-action toolbar's exact width.
+    // Hovering therefore changes only opacity/content, never the width that
+    // the message bubble is allowed to use (and never its wrapping/shape).
+    const toolbarWidth = 268.0;
+    final reserveToolbar = _hoverCapable && actionsEnabled && !selectionMode;
+    final gutter = reserveToolbar ? 4.0 : 52.0;
+
+    // The toolbar is a normal Row sibling directly adjacent to the bubble's
+    // own (naturally-sized, Flexible) width — not an absolutely-positioned
+    // overlay. An earlier version placed it via Positioned + Clip.none
+    // overflowing a narrow Stack, which painted it in the right spot but
+    // left it outside Flutter's hit-testable bounds (RenderBox hit-testing
+    // only considers a box's own layout size before testing overflowing
+    // children), so the mouse left the real hoverable area before ever
+    // reaching it and it could never be clicked. A second attempt anchored
+    // it via Alignment inside a full-width Stack, which fixed clickability
+    // but pinned it to the far edge of the whole row instead of next to the
+    // bubble. A Row with the toolbar and the Flexible bubble as siblings
+    // sidesteps both problems: it sits directly beside the bubble's actual
+    // rendered edge (matching Signal), and it's real, non-overflowing
+    // layout, so it's always within bounds.
+    final toolbarSlot = reserveToolbar
+        ? SizedBox(
+            width: toolbarWidth,
+            child: showToolbar
+                ? Align(
+                    alignment: mine
+                        ? Alignment.centerRight
+                        : Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      child: _HoverQuickActions(
+                        onReaction: onReaction,
+                        onReply: onReply,
+                        onOpenActions: onOpenActions,
+                      ),
+                    ),
+                  )
+                : null,
+          )
+        : null;
+
+    final content = Material(
+      color: selected
+          ? colors.tertiaryContainer.withValues(alpha: 0.22)
+          : Colors.transparent,
+      child: InkWell(
+        onTap: selectionMode && actionsEnabled ? onSelectionTap : null,
+        onLongPress: actionsEnabled ? onOpenActions : null,
+        onSecondaryTap: actionsEnabled ? onOpenActions : null,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final availableBubbleWidth =
+                constraints.maxWidth - (reserveToolbar ? toolbarWidth : 0);
+            final maximumBubbleWidth = availableBubbleWidth.clamp(1.0, 480.0);
+            final bubbleColumn = ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: maximumBubbleWidth),
+              child: Padding(
+                padding: EdgeInsets.only(
+                  top: 4,
+                  bottom: 4,
+                  left: mine ? gutter : 0,
+                  right: mine ? 0 : gutter,
+                ),
+                child: Opacity(
+                  opacity: event.status.isSent ? 1 : 0.58,
+                  child: Column(
+                    crossAxisAlignment: mine
+                        ? CrossAxisAlignment.end
+                        : CrossAxisAlignment.start,
+                    children: [
+                      bubbleWithBadges,
+                      if (groups.isNotEmpty) const SizedBox(height: 15),
+                    ],
+                  ),
+                ),
+              ),
+            );
+
+            return Align(
+              alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  if (mine && toolbarSlot != null) toolbarSlot,
+                  bubbleColumn,
+                  if (!mine && toolbarSlot != null) toolbarSlot,
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+
+    if (!_hoverCapable) return content;
+    return MouseRegion(
+      onEnter: (_) => _setHovering(true),
+      onExit: (_) => _setHovering(false),
+      child: content,
+    );
+  }
+}
+
+class _ReplyPreview extends StatefulWidget {
+  final Event event;
+  final Timeline timeline;
+  final Color textColor;
+  final ArchiveRoomData archive;
+
+  const _ReplyPreview({
+    required this.event,
+    required this.timeline,
+    required this.textColor,
+    required this.archive,
+  });
+
+  @override
+  State<_ReplyPreview> createState() => _ReplyPreviewState();
+}
+
+class _ReplyPreviewState extends State<_ReplyPreview> {
+  late final Future<Event?> _reply = widget.event.getReplyEvent(
+    widget.timeline,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final archiveId = widget.event.content[archiveReplyKey]?.toString();
+    if (widget.event.inReplyToEventId() == null && archiveId == null) {
+      return const SizedBox.shrink();
+    }
+    if (archiveId != null) {
+      final message = widget.archive.message(archiveId);
+      if (message == null) return const SizedBox.shrink();
+      return Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.fromLTRB(9, 7, 9, 7),
+        decoration: BoxDecoration(
+          color: widget.textColor.withValues(alpha: 0.08),
+          border: Border(left: BorderSide(color: widget.textColor, width: 3)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: ColorEmojiText(
+          '${message.authorName}: ${message.body}',
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      );
+    }
+    return FutureBuilder<Event?>(
+      future: _reply,
+      builder: (context, snapshot) {
+        final reply = snapshot.data;
+        if (reply == null) return const SizedBox.shrink();
+        return Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.fromLTRB(9, 7, 9, 7),
+          decoration: BoxDecoration(
+            color: widget.textColor.withValues(alpha: 0.08),
+            border: Border(left: BorderSide(color: widget.textColor, width: 3)),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                readableMatrixUserName(reply.senderFromMemoryOrFallback),
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: widget.textColor,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              ColorEmojiText(
+                visibleMessageBody(reply),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: widget.textColor.withValues(alpha: 0.82),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ReactionBadges extends StatelessWidget {
+  static const _circleSize = 22.0;
+  static const _overlapStep = 14.0;
+
+  final List<ReactionGroup> groups;
+  final ValueChanged<String> onReaction;
+
+  const _ReactionBadges({required this.groups, required this.onReaction});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    // A single reaction type still reads better as a plain emoji + count
+    // pill — there's nothing to overlap yet.
+    if (groups.length == 1) {
+      final group = groups.single;
+      return _badgePill(
+        colors: colors,
+        reactedByMe: group.reactedByMe,
+        onTap: () => onReaction(group.emoji),
+        child: ReactionLabel(emoji: group.emoji, count: group.count),
+      );
+    }
+
+    // Multiple reaction types: a Facebook-style cluster of overlapping
+    // circles (one per emoji, most recent on top) followed by the combined
+    // total. Each circle sits at a real, non-overflowing Positioned offset
+    // within a Stack whose own width is sized to fit them all, so — unlike
+    // an earlier attempt at overlap via Positioned + Clip.none overflow —
+    // every circle stays genuinely within hit-testable bounds and remains
+    // individually tappable.
+    final totalCount = groups.fold<int>(0, (sum, group) => sum + group.count);
+    final clusterWidth = _circleSize + (groups.length - 1) * _overlapStep;
+
+    return Builder(
+      builder: (context) => _badgePill(
+        colors: colors,
+        reactedByMe: groups.any((group) => group.reactedByMe),
+        // Individual circles remain directly tappable wherever they're
+        // actually visible (below); this handles taps that land on the
+        // pill itself — the total count, or gaps between circles — by
+        // "exploding" the whole cluster into a popup where every reaction
+        // is fully visible and clickable, including ones mostly hidden
+        // behind later circles.
+        onTap: () => _showExplodedPopup(context, colors),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: clusterWidth,
+              height: _circleSize,
+              child: Stack(
+                children: [
+                  for (final (index, group) in groups.indexed)
+                    Positioned(
+                      left: index * _overlapStep,
+                      width: _circleSize,
+                      height: _circleSize,
+                      child: Material(
+                        shape: CircleBorder(
+                          side: BorderSide(color: colors.surface, width: 1.5),
+                        ),
+                        color: group.reactedByMe
+                            ? colors.primaryContainer
+                            : colors.surfaceContainerHigh,
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: () => onReaction(group.emoji),
+                          child: Center(
+                            child: EmojiGlyph(group.emoji, size: 13),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 4),
+            Text('$totalCount'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showExplodedPopup(
+    BuildContext context,
+    ColorScheme colors,
+  ) async {
+    final button = context.findRenderObject()! as RenderBox;
+    final overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset.zero, ancestor: overlay),
+        button.localToGlobal(
+          button.size.bottomRight(Offset.zero),
+          ancestor: overlay,
+        ),
+      ),
+      Offset.zero & overlay.size,
+    );
+
+    final selected = await showMenu<String>(
+      context: context,
+      position: position,
+      color: Colors.transparent,
+      elevation: 0,
+      shadowColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      items: [
+        PopupMenuItem<String>(
+          enabled: false,
+          padding: EdgeInsets.zero,
+          child: Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            children: [
+              for (final group in groups)
+                _badgePill(
+                  colors: colors,
+                  reactedByMe: group.reactedByMe,
+                  onTap: () => Navigator.of(context).pop(group.emoji),
+                  child: ReactionLabel(emoji: group.emoji, count: group.count),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+    if (selected != null) onReaction(selected);
+  }
+
+  Widget _badgePill({
+    required ColorScheme colors,
+    required bool reactedByMe,
+    required VoidCallback? onTap,
+    required Widget child,
+  }) {
+    return Material(
+      color: reactedByMe
+          ? colors.primaryContainer
+          : colors.surfaceContainerHigh,
+      shape: StadiumBorder(side: BorderSide(color: colors.surface, width: 1.5)),
+      elevation: 1,
+      child: InkWell(
+        customBorder: const StadiumBorder(),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+class _HoverQuickActions extends StatelessWidget {
+  final ValueChanged<String> onReaction;
+  final VoidCallback onReply;
+  final VoidCallback onOpenActions;
+
+  const _HoverQuickActions({
+    required this.onReaction,
+    required this.onReply,
+    required this.onOpenActions,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final emoji in quickReactionEmojis)
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints.tightFor(
+                  width: 32,
+                  height: 32,
+                ),
+                padding: EdgeInsets.zero,
+                onPressed: () => onReaction(emoji),
+                tooltip: 'React $emoji',
+                icon: EmojiGlyph(emoji, size: 17),
+              ),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+              padding: EdgeInsets.zero,
+              onPressed: onReply,
+              tooltip: 'Reply',
+              icon: const Icon(Icons.reply, size: 18),
+            ),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+              padding: EdgeInsets.zero,
+              onPressed: onOpenActions,
+              tooltip: 'More actions',
+              icon: const Icon(Icons.more_horiz, size: 18),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MessageContent extends StatelessWidget {
+  final Event event;
+  final Color textColor;
+  final String liamUserId;
+
+  const _MessageContent({
+    required this.event,
+    required this.textColor,
+    required this.liamUserId,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Liam's picture replies are still real image/sticker events and must
+    // render as such. Only an ordinary text message gets the special
+    // "Liam" heading treatment — checking that before the message-type
+    // switch would swallow Liam's images into a plain text bubble instead.
+    return switch (event.messageType) {
+      MessageTypes.Image ||
+      MessageTypes.Sticker => _EncryptedImage(event: event),
+      MessageTypes.Video => _EncryptedVideo(event: event),
+      MessageTypes.File || MessageTypes.Audio => _EncryptedAttachment(
+        event: event,
+        textColor: textColor,
+      ),
+      _ =>
+        isLiamAnswer(event, liamUserId: liamUserId)
+            ? _LiamAnswerContent(event: event, textColor: textColor)
+            : ColorEmojiText(
+                visibleMessageBody(event),
+                selectable: true,
+                style: TextStyle(
+                  color: textColor,
+                  fontSize: event.onlyEmotes && event.numberEmotes <= 5
+                      ? 38
+                      : null,
+                ),
+              ),
+    };
+  }
+}
+
+class _EncryptedAttachment extends StatefulWidget {
+  final Event event;
+  final Color textColor;
+
+  const _EncryptedAttachment({required this.event, required this.textColor});
+
+  @override
+  State<_EncryptedAttachment> createState() => _EncryptedAttachmentState();
+}
+
+class _EncryptedAttachmentState extends State<_EncryptedAttachment> {
+  bool _opening = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = switch (widget.event.messageType) {
+      MessageTypes.Video => Icons.video_file_outlined,
+      MessageTypes.Audio => Icons.audio_file_outlined,
+      _ => Icons.insert_drive_file_outlined,
+    };
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: _opening ? null : _openAttachment,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _opening
+                ? const SizedBox.square(
+                    dimension: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(icon, color: widget.textColor),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ColorEmojiText(
+                    widget.event.body,
+                    style: TextStyle(color: widget.textColor),
+                  ),
+                  Text(
+                    _desktop ? 'Tap to save' : 'Tap to open or save',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: widget.textColor.withValues(alpha: 0.75),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openAttachment() async {
+    setState(() => _opening = true);
+    try {
+      if (_desktop) {
+        final destination = await getSaveLocation(
+          suggestedName: path.basename(widget.event.body),
+        );
+        if (destination == null) return;
+        final downloaded = await widget.event.downloadAndDecryptAttachment();
+        await File(
+          destination.path,
+        ).writeAsBytes(downloaded.bytes, flush: true);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Saved to ${destination.path}')),
+          );
+        }
+        return;
+      }
+
+      final downloaded = await widget.event.downloadAndDecryptAttachment();
+      final directory = await getTemporaryDirectory();
+      final safeName = path
+          .basename(downloaded.name)
+          .replaceAll(RegExp(r'[^A-Za-z0-9._ -]'), '_');
+      final output = File(
+        path.join(directory.path, '${widget.event.eventId.hashCode}_$safeName'),
+      );
+      await output.writeAsBytes(downloaded.bytes, flush: true);
+      if (!mounted) return;
+      final renderBox = context.findRenderObject() as RenderBox?;
+      await sharing.SharePlus.instance.share(
+        sharing.ShareParams(
+          title: downloaded.name,
+          files: [
+            sharing.XFile(
+              output.path,
+              name: downloaded.name,
+              mimeType: downloaded.mimeType,
+            ),
+          ],
+          fileNameOverrides: [downloaded.name],
+          sharePositionOrigin: renderBox == null
+              ? null
+              : renderBox.localToGlobal(Offset.zero) & renderBox.size,
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('The attachment could not be opened.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _opening = false);
+    }
+  }
+
+  bool get _desktop =>
+      defaultTargetPlatform == TargetPlatform.linux ||
+      defaultTargetPlatform == TargetPlatform.macOS ||
+      defaultTargetPlatform == TargetPlatform.windows;
+}
+
+class _LiamAnswerContent extends StatelessWidget {
+  final Event event;
+  final Color textColor;
+
+  const _LiamAnswerContent({required this.event, required this.textColor});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const LiamIcon(size: 38),
+            const SizedBox(width: 9),
+            Text(
+              'Liam',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: textColor,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ColorEmojiText(
+          visibleLiamAnswer(event),
+          selectable: true,
+          style: TextStyle(color: textColor),
+        ),
+      ],
+    );
+  }
+}
+
+class _EncryptedImage extends StatefulWidget {
+  final Event event;
+
+  const _EncryptedImage({required this.event});
+
+  @override
+  State<_EncryptedImage> createState() => _EncryptedImageState();
+}
+
+class _EncryptedImageState extends State<_EncryptedImage> {
+  late final Future<MatrixFile> _thumbnail = _loadThumbnail();
+
+  Future<MatrixFile> _loadThumbnail() async {
+    try {
+      return await widget.event.downloadAndDecryptAttachment(
+        getThumbnail: true,
+      );
+    } catch (_) {
+      return widget.event.downloadAndDecryptAttachment();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<MatrixFile>(
+      future: _thumbnail,
+      builder: (context, snapshot) {
+        final file = snapshot.data;
+        if (file != null) {
+          return Semantics(
+            button: true,
+            label: 'Open encrypted picture or GIF',
+            child: GestureDetector(
+              onTap: () => _showFullImage(context),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.memory(
+                  file.bytes,
+                  width: 280,
+                  height: 210,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                ),
+              ),
+            ),
+          );
+        }
+        if (snapshot.hasError) {
+          return const SizedBox(
+            width: 220,
+            height: 110,
+            child: Center(child: Text('Picture unavailable')),
+          );
+        }
+        return const SizedBox(
+          width: 220,
+          height: 110,
+          child: Center(child: CircularProgressIndicator()),
+        );
+      },
+    );
+  }
+
+  Future<void> _showFullImage(BuildContext context) async {
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.9),
+      builder: (context) => _FullImageDialog(event: widget.event),
+    );
+  }
+}
+
+class _FullImageDialog extends StatefulWidget {
+  final Event event;
+
+  const _FullImageDialog({required this.event});
+
+  @override
+  State<_FullImageDialog> createState() => _FullImageDialogState();
+}
+
+class _FullImageDialogState extends State<_FullImageDialog> {
+  late final Future<MatrixFile> _image = widget.event
+      .downloadAndDecryptAttachment();
+  bool _saving = false;
+  bool _saved = false;
+  String? _saveStatus;
+  Timer? _saveStatusTimer;
+
+  @override
+  void dispose() {
+    _saveStatusTimer?.cancel();
+    super.dispose();
+  }
+
+  void _dismissSaveStatusSoon() {
+    _saveStatusTimer?.cancel();
+    _saveStatusTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _saveStatus = null);
+    });
+  }
+
+  Future<void> _save() async {
+    if (_saving || _saved) return;
+    _saveStatusTimer?.cancel();
+    setState(() {
+      _saving = true;
+      _saveStatus = 'Downloading and saving picture…';
+    });
+    try {
+      final image = await _image;
+      final result = await MediaSaveService.saveImage(
+        bytes: image.bytes,
+        name: image.name,
+        mimeType: image.mimeType,
+      );
+      if (mounted) {
+        setState(() {
+          _saved = result != null;
+          _saveStatus = result?.message ?? 'Save canceled.';
+        });
+        _dismissSaveStatusSoon();
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _saveStatus = 'The picture could not be saved.');
+        _dismissSaveStatusSoon();
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final pictureControlStyle = IconButton.styleFrom(
+      backgroundColor: colors.primaryContainer,
+      foregroundColor: colors.onPrimaryContainer,
+      disabledBackgroundColor: colors.primaryContainer.withValues(alpha: 0.55),
+      disabledForegroundColor: colors.onPrimaryContainer.withValues(
+        alpha: 0.55,
+      ),
+    );
+    return Dialog.fullscreen(
+      backgroundColor: Colors.black,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: FutureBuilder<MatrixFile>(
+              future: _image,
+              builder: (context, snapshot) {
+                final file = snapshot.data;
+                if (file != null) {
+                  return InteractiveViewer(
+                    minScale: 0.8,
+                    maxScale: 5,
+                    child: Center(
+                      child: Image.memory(file.bytes, gaplessPlayback: true),
+                    ),
+                  );
+                }
+                if (snapshot.hasError) {
+                  return const Center(
+                    child: Text(
+                      'Picture unavailable',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  );
+                }
+                return const Center(child: CircularProgressIndicator());
+              },
+            ),
+          ),
+          SafeArea(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                IconButton.filled(
+                  onPressed: () => Navigator.pop(context),
+                  style: pictureControlStyle,
+                  icon: const Icon(Icons.close),
+                  tooltip: 'Close',
+                ),
+                IconButton.filled(
+                  onPressed: _saving || _saved ? null : _save,
+                  style: pictureControlStyle,
+                  icon: _saved
+                      ? const Icon(Icons.check)
+                      : _saving
+                      ? SizedBox.square(
+                          dimension: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: colors.onPrimaryContainer,
+                          ),
+                        )
+                      : const Icon(Icons.download),
+                  tooltip: _saved ? 'Picture saved' : 'Save picture',
+                ),
+              ],
+            ),
+          ),
+          if (_saveStatus != null)
+            Positioned(
+              left: 24,
+              right: 24,
+              bottom: 20,
+              child: SafeArea(
+                top: false,
+                child: Center(
+                  child: Material(
+                    color: colors.primaryContainer,
+                    elevation: 6,
+                    borderRadius: BorderRadius.circular(18),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 12,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_saving) ...[
+                            SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: colors.onPrimaryContainer,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                          ] else if (_saved) ...[
+                            Icon(
+                              Icons.check_circle,
+                              size: 20,
+                              color: colors.onPrimaryContainer,
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                          Flexible(
+                            child: Text(
+                              _saveStatus!,
+                              style: TextStyle(
+                                color: colors.onPrimaryContainer,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EncryptedVideo extends StatefulWidget {
+  final Event event;
+
+  const _EncryptedVideo({required this.event});
+
+  @override
+  State<_EncryptedVideo> createState() => _EncryptedVideoState();
+}
+
+class _EncryptedVideoState extends State<_EncryptedVideo> {
+  // Synapse (and homeservers generally) can only generate thumbnails for
+  // image content, never for video. `downloadAndDecryptAttachment` silently
+  // downgrades `getThumbnail: true` to the full attachment when the event
+  // has no separate `info.thumbnail_url`/`thumbnail_file` — which is every
+  // video this app sends, since none of the send paths attach one. Without
+  // this `hasThumbnail` gate, that fallback would hand the raw video bytes
+  // to `Image.memory`, which fails to decode them as an image.
+  late final Future<MatrixFile>? _thumbnail = widget.event.hasThumbnail
+      ? widget.event.downloadAndDecryptAttachment(getThumbnail: true)
+      : null;
+
+  bool _loadingFull = false;
+  bool _savingVideo = false;
+  bool _videoSaved = false;
+  String? _videoSaveStatus;
+  Timer? _videoSaveStatusTimer;
+  Player? _player;
+  VideoController? _controller;
+  EncryptedVideoStreamSession? _session;
+  StreamSubscription<String>? _sessionEvents;
+  int _quarterTurns = 0;
+
+  @override
+  void dispose() {
+    _videoSaveStatusTimer?.cancel();
+    _sessionEvents?.cancel();
+    _session?.dispose();
+    _player?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _startPlayback() async {
+    setState(() => _loadingFull = true);
+    try {
+      final event = widget.event;
+      final fileMap = event.content.tryGetMap<String, Object?>('file');
+      final mxcUrl = event.attachmentMxcUrl;
+      final totalLength = event.infoMap.tryGet<int>('size');
+      if (fileMap == null || mxcUrl == null || totalLength == null) {
+        throw StateError('This video has no playable attachment.');
+      }
+      final key = decodeUnpaddedBase64(
+        fileMap.tryGetMap<String, Object?>('key')?.tryGet<String>('k') ?? '',
+      );
+      final iv = decodeUnpaddedBase64(fileMap.tryGet<String>('iv') ?? '');
+      final mimeType = event.infoMap.tryGet<String>('mimetype') ?? 'video/mp4';
+
+      final client = event.room.client;
+      final accessToken = client.accessToken;
+      if (accessToken == null) throw StateError('Not connected.');
+      final downloadUri = await mxcUrl.getDownloadUri(client);
+
+      final session = await EncryptedVideoStreamSession.start(
+        downloadUri: downloadUri,
+        accessToken: accessToken,
+        key: key,
+        iv: iv,
+        totalLength: totalLength,
+        mimeType: mimeType,
+      );
+      final sessionEvents = session.events.listen((message) {
+        if (message == 'integrity-failure' && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('This video failed an integrity check.'),
+            ),
+          );
+          _stop();
+        }
+      });
+
+      final player = Player();
+      final controller = VideoController(player);
+      final media = Media('http://127.0.0.1:${session.port}/video');
+      var quarterTurns = 0;
+
+      if (Platform.isLinux) {
+        final nativePlayer = player.platform as dynamic;
+
+        // This must succeed before opening the media. Otherwise mpv can
+        // enter the native metadata-rotation path that previously crashed.
+        await nativePlayer.setProperty('video-rotate', 'no');
+        await nativePlayer.setProperty('hwdec', 'auto');
+        await _configureLinuxVideoColor(player);
+        await player.open(media, play: false);
+
+        try {
+          final sourceRotation = await nativePlayer.getProperty(
+            'video-dec-params/rotate',
+          );
+          final sourceRotationDegrees = sourceRotation is num
+              ? sourceRotation.toInt()
+              : int.tryParse(sourceRotation?.toString() ?? '');
+          quarterTurns = _quarterTurnsForDegrees(sourceRotationDegrees);
+        } catch (error) {
+          debugPrint('Unable to read source video rotation: $error');
+        }
+
+        await player.play();
+      } else {
+        await player.open(media);
+      }
+      if (!mounted) {
+        sessionEvents.cancel();
+        session.dispose();
+        player.dispose();
+        return;
+      }
+      setState(() {
+        _session = session;
+        _sessionEvents = sessionEvents;
+        _quarterTurns = quarterTurns;
+        _player = player;
+        _controller = controller;
+        _loadingFull = false;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => _loadingFull = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('The video could not be played.')),
+        );
+      }
+    }
+  }
+
+  void _stop() {
+    _sessionEvents?.cancel();
+    _session?.dispose();
+    _player?.dispose();
+    setState(() {
+      _sessionEvents = null;
+      _quarterTurns = 0;
+      _session = null;
+      _player = null;
+      _controller = null;
+    });
+  }
+
+  Future<void> _saveVideo() async {
+    if (_savingVideo || _videoSaved) return;
+    _videoSaveStatusTimer?.cancel();
+    setState(() {
+      _savingVideo = true;
+      _videoSaveStatus = 'Downloading and saving video…';
+    });
+    try {
+      final video = await widget.event.downloadAndDecryptAttachment();
+      final result = await MediaSaveService.saveVideo(
+        bytes: video.bytes,
+        name: video.name,
+        mimeType: video.mimeType,
+      );
+      if (mounted) {
+        setState(() {
+          _videoSaved = result != null;
+          _videoSaveStatus = result?.message ?? 'Save canceled.';
+        });
+        _dismissVideoSaveStatusSoon();
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _videoSaveStatus = 'The video could not be saved.');
+        _dismissVideoSaveStatusSoon();
+      }
+    } finally {
+      if (mounted) setState(() => _savingVideo = false);
+    }
+  }
+
+  void _dismissVideoSaveStatusSoon() {
+    _videoSaveStatusTimer?.cancel();
+    _videoSaveStatusTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _videoSaveStatus = null);
+    });
+  }
+
+  Widget _saveVideoButton() {
+    return _ScrimIconButton(
+      icon: _videoSaved ? Icons.check : Icons.download,
+      tooltip: _videoSaved ? 'Video saved' : 'Save video',
+      loading: _savingVideo,
+      onPressed: _savingVideo || _videoSaved ? null : _saveVideo,
+    );
+  }
+
+  Widget _saveVideoStatusOverlay(ColorScheme colors) {
+    final status = _videoSaveStatus;
+    if (status == null) return const SizedBox.shrink();
+    return Positioned(
+      left: 8,
+      right: 8,
+      bottom: 8,
+      child: IgnorePointer(
+        child: Center(
+          child: Material(
+            color: colors.primaryContainer,
+            elevation: 6,
+            borderRadius: BorderRadius.circular(14),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_savingVideo) ...[
+                    SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: colors.onPrimaryContainer,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ] else if (_videoSaved) ...[
+                    Icon(
+                      Icons.check_circle,
+                      size: 18,
+                      color: colors.onPrimaryContainer,
+                    ),
+                    const SizedBox(width: 7),
+                  ],
+                  Flexible(
+                    child: Text(
+                      status,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: colors.onPrimaryContainer,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    if (_controller != null) {
+      return SizedBox(
+        width: 280,
+        height: 210,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Platform.isLinux
+                    ? MediaQuery.withClampedTextScaling(
+                        maxScaleFactor: 1,
+                        child: RotatedBox(
+                          quarterTurns: _quarterTurns,
+                          child: Video(controller: _controller!),
+                        ),
+                      )
+                    : Video(controller: _controller!),
+              ),
+            ),
+            Positioned(top: 4, right: 40, child: _saveVideoButton()),
+            Positioned(
+              top: 4,
+              right: 4,
+              child: _ScrimIconButton(
+                icon: Icons.close,
+                tooltip: 'Stop',
+                onPressed: _stop,
+              ),
+            ),
+            _saveVideoStatusOverlay(colors),
+          ],
+        ),
+      );
+    }
+
+    final thumbnailFuture = _thumbnail;
+    if (thumbnailFuture == null) {
+      return _idle(null);
+    }
+    return FutureBuilder<MatrixFile>(
+      future: thumbnailFuture,
+      builder: (context, snapshot) => _idle(snapshot.data),
+    );
+  }
+
+  // Renders either a decoded thumbnail image or, if the event has none (the
+  // common case for videos), a generic placeholder — either way it's the
+  // same tappable "play" surface. A thumbnail load failure falls back to the
+  // placeholder rather than an error: the video itself is still perfectly
+  // playable even when its preview image couldn't be fetched.
+  Widget _idle(MatrixFile? thumbnail) {
+    return Semantics(
+      button: true,
+      label: 'Play encrypted video',
+      child: GestureDetector(
+        onTap: _loadingFull ? null : _startPlayback,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox(
+            width: 280,
+            height: 210,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (thumbnail != null)
+                  Image.memory(
+                    thumbnail.bytes,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  )
+                else
+                  const ColoredBox(
+                    color: Colors.black87,
+                    child: Icon(
+                      Icons.videocam,
+                      color: Colors.white54,
+                      size: 48,
+                    ),
+                  ),
+                Container(color: Colors.black.withValues(alpha: 0.25)),
+                Center(
+                  child: _loadingFull
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Icon(
+                          Icons.play_circle_fill,
+                          color: Colors.white,
+                          size: 56,
+                        ),
+                ),
+                Positioned(top: 4, right: 4, child: _saveVideoButton()),
+                _saveVideoStatusOverlay(Theme.of(context).colorScheme),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Flutter's Linux texture is an SDR surface. Tell libmpv about that
+// output so HDR and HLG recordings are converted before reaching Flutter.
+Future<void> _configureLinuxVideoColor(Player player) async {
+  if (!Platform.isLinux) return;
+
+  final nativePlayer = player.platform as dynamic;
+  for (final option in _linuxSdrVideoOptions.entries) {
+    await nativePlayer.setProperty(option.key, option.value);
+  }
+
+  // Do not install a lavfi tone-mapping filter here. mpv's GPU renderer
+  // performs HLG/HDR-to-SDR tone mapping using the target properties below.
+}
+
+// mpv display rotation is disabled on Linux. Flutter applies the source
+// metadata rotation read from video-dec-params.
+int _quarterTurnsForDegrees(int? degrees) {
+  if (degrees == null) return 0;
+
+  // FFmpeg/mpv rotation metadata is counterclockwise, while RotatedBox uses
+  // clockwise quarter turns.
+  final clockwiseDegrees = (((-degrees) % 360) + 360) % 360;
+  return (clockwiseDegrees ~/ 90) % 4;
+}
+
+const _linuxSdrVideoOptions = <String, String>{
+  'target-prim': 'bt.709',
+  'target-trc': 'srgb',
+  'target-peak': '203',
+  'tone-mapping': 'bt.2390',
+  'gamut-mapping-mode': 'perceptual',
+  'hdr-compute-peak': 'yes',
+};
+
+class _ScrimIconButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final bool loading;
+  final VoidCallback? onPressed;
+
+  const _ScrimIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+    this.loading = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.45),
+      shape: const CircleBorder(),
+      child: IconButton(
+        constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+        padding: EdgeInsets.zero,
+        iconSize: 18,
+        color: Colors.white,
+        icon: loading
+            ? const SizedBox.square(
+                dimension: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            : Icon(icon),
+        tooltip: tooltip,
+        onPressed: onPressed,
+      ),
+    );
+  }
+}
