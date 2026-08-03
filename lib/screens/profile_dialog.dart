@@ -76,6 +76,7 @@ class _AccountSettingsDialogState extends State<_AccountSettingsDialog> {
   late bool _notificationsEnabled;
   late bool _soundEnabled;
   late bool _showPreviews;
+  late bool _notifyIfReadElsewhere;
   late bool _sendReadReceipts;
   bool _saving = false;
   bool _testing = false;
@@ -92,6 +93,8 @@ class _AccountSettingsDialogState extends State<_AccountSettingsDialog> {
     _notificationsEnabled = widget.notificationController.enabled;
     _soundEnabled = widget.notificationController.soundEnabled;
     _showPreviews = widget.notificationController.showPreviews;
+    _notifyIfReadElsewhere =
+        widget.notificationController.notifyIfReadElsewhere;
     _sendReadReceipts = widget.readReceiptController.enabled;
   }
 
@@ -163,6 +166,7 @@ class _AccountSettingsDialogState extends State<_AccountSettingsDialog> {
         enabled: _notificationsEnabled,
         soundEnabled: _soundEnabled,
         showPreviews: _showPreviews,
+        notifyIfReadElsewhere: _notifyIfReadElsewhere,
       );
       await widget.readReceiptController.setEnabled(_sendReadReceipts);
       if (mounted) Navigator.pop(context, true);
@@ -243,6 +247,19 @@ class _AccountSettingsDialogState extends State<_AccountSettingsDialog> {
                 onChanged: busy || !_notificationsEnabled
                     ? null
                     : (value) => setState(() => _showPreviews = value),
+              ),
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                secondary: const Icon(Icons.devices_other_outlined),
+                title: const Text('Notify after reading elsewhere'),
+                subtitle: const Text(
+                  'Still notify this device if another device has already '
+                  'marked the message read.',
+                ),
+                value: _notifyIfReadElsewhere,
+                onChanged: busy || !_notificationsEnabled
+                    ? null
+                    : (value) => setState(() => _notifyIfReadElsewhere = value),
               ),
               Align(
                 alignment: Alignment.centerLeft,

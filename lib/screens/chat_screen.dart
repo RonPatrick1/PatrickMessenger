@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:share_plus/share_plus.dart' as sharing;
 import 'package:share_receiver/share_receiver.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../archive/archive_contract.dart';
 import '../archive/archive_models.dart';
@@ -24,6 +25,7 @@ import '../matrix/display_names.dart';
 import '../matrix/timeline_event_merge.dart';
 import '../notifications/liam_chatter_visibility.dart';
 import '../receipts/message_receipt_service.dart';
+import '../receipts/read_visibility.dart';
 import '../search/search_index_service.dart';
 import '../search/shared_search_service.dart';
 import '../services/chat_clipboard.dart';
@@ -73,7 +75,8 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen>
+    with WidgetsBindingObserver, WindowListener {
   static const _initialMatrixMessageCount = 50;
   static const _initialArchiveMessageCount = 200;
   static const _archiveHistoryPageSize = 200;
@@ -123,6 +126,9 @@ class _ChatScreenState extends State<ChatScreen> {
   // hundreds of real messages in between never having been requested yet.
   int _visibleArchiveMessageCount = 0;
   List<ArchiveMessage> _archiveMessages = const [];
+  AppLifecycleState _appLifecycleState =
+      WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
+  bool _desktopWindowFocused = true;
 
   bool get _selectionMode => _selectedEventIds.isNotEmpty;
   bool get _liamJoined => widget.room
@@ -130,10 +136,18 @@ class _ChatScreenState extends State<ChatScreen> {
       .any((user) => user.id == widget.liamUserId);
   bool get _sharedSearchJoined =>
       widget.searchIndex.sharedSearch.isJoined(widget.room);
+  bool get _usesDesktopWindowFocus =>
+      !kIsWeb && (Platform.isLinux || Platform.isMacOS);
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    if (_usesDesktopWindowFocus) {
+      _desktopWindowFocused = false;
+      windowManager.addListener(this);
+      unawaited(_initializeDesktopWindowFocus());
+    }
     HardwareKeyboard.instance.addHandler(_handleHardwareKeyboard);
     _itemPositions.itemPositions.addListener(_handleScroll);
     _messageController.addListener(_handleComposerTextChanged);
@@ -173,7 +187,43 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _markLatestMessageRead();
+    });
+  }
+
+  Future<void> _initializeDesktopWindowFocus() async {
+    try {
+      _desktopWindowFocused = await windowManager.isFocused();
+      if (_desktopWindowFocused) _markLatestMessageRead();
+    } catch (_) {
+      // Failing closed prevents a hidden desktop window from claiming reads.
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appLifecycleState = state;
+    if (state == AppLifecycleState.resumed) _markLatestMessageRead();
+  }
+
+  @override
+  void onWindowFocus() {
+    _desktopWindowFocused = true;
+    _markLatestMessageRead();
+  }
+
+  @override
+  void onWindowBlur() {
+    _desktopWindowFocused = false;
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    if (_usesDesktopWindowFocus) windowManager.removeListener(this);
     HardwareKeyboard.instance.removeHandler(_handleHardwareKeyboard);
     _timelineRefreshTimer?.cancel();
     _timelineEventSubscription?.cancel();
@@ -656,6 +706,14 @@ class _ChatScreenState extends State<ChatScreen> {
           .length;
 
   void _markLatestMessageRead() {
+    final routeIsCurrent = ModalRoute.of(context)?.isCurrent ?? true;
+    if (!shouldMarkConversationRead(
+      lifecycleState: _appLifecycleState,
+      routeIsCurrent: routeIsCurrent,
+      desktopWindowFocused: !_usesDesktopWindowFocus || _desktopWindowFocused,
+    )) {
+      return;
+    }
     final timeline = _timeline;
     if (timeline == null) return;
     final messages = _messages(timeline);

@@ -74,6 +74,7 @@ class IosPushService {
         'accessToken': _client.accessToken,
         'userId': _client.userID,
         'showPreviews': _preferences.showPreviews,
+        'notifyIfReadElsewhere': _preferences.notifyIfReadElsewhere,
       });
       if (!_preferences.enabled) {
         await _client.deletePusher(PusherId(appId: _appId, pushkey: token));

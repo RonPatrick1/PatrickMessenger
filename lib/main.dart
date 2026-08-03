@@ -1,5 +1,4 @@
-import 'dart:async';
-
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:fvp/fvp.dart' as fvp;
@@ -10,7 +9,8 @@ import 'app.dart';
 import 'archive/archive_repository.dart';
 import 'config/app_config.dart';
 import 'matrix/matrix_client_factory.dart';
-import 'notifications/android_message_connection_service.dart';
+import 'notifications/android_background_message_handler.dart';
+import 'notifications/android_push_service.dart';
 import 'notifications/conversation_mute_controller.dart';
 import 'notifications/ios_push_service.dart';
 import 'notifications/liam_chatter_visibility.dart';
@@ -27,8 +27,11 @@ import 'settings/theme_preference.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (defaultTargetPlatform == TargetPlatform.linux) {
+  if (defaultTargetPlatform == TargetPlatform.linux ||
+      defaultTargetPlatform == TargetPlatform.macOS) {
     await windowManager.ensureInitialized();
+  }
+  if (defaultTargetPlatform == TargetPlatform.linux) {
     fvp.registerWith(
       options: {
         'platforms': ['linux'],
@@ -37,7 +40,9 @@ Future<void> main() async {
   } else {
     MediaKit.ensureInitialized();
   }
-  AndroidMessageConnectionService.initializeCommunicationPort();
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  }
   await _start();
 }
 
@@ -101,7 +106,12 @@ Future<void> _startup() async {
     appId: config.iosPushAppId,
   );
   await iosPushService.initialize();
-  final androidMessageConnection = AndroidMessageConnectionService(client);
+  final androidPushService = AndroidPushService(
+    client: client,
+    preferences: notificationController,
+    config: config,
+  );
+  await androidPushService.initialize();
   runApp(
     PatrickMessengerApp(
       client: client,
@@ -119,5 +129,4 @@ Future<void> _startup() async {
       incomingShares: incomingShares,
     ),
   );
-  unawaited(androidMessageConnection.initialize());
 }

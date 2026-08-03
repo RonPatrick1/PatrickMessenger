@@ -55,4 +55,48 @@ void main() {
       expect(shouldNotify(type: EventTypes.Encrypted), isFalse);
     },
   );
+
+  test('cross-device read policy follows the per-device preference', () {
+    final messageTime = DateTime.utc(2026, 8, 3, 12);
+    expect(
+      shouldSuppressNotificationForReadMarker(
+        notifyIfReadElsewhere: true,
+        eventId: r'$message',
+        eventTimestamp: messageTime,
+        fullyReadEventId: r'$message',
+        fullyReadTimestamp: messageTime,
+      ),
+      isFalse,
+    );
+    expect(
+      shouldSuppressNotificationForReadMarker(
+        notifyIfReadElsewhere: false,
+        eventId: r'$message',
+        eventTimestamp: messageTime,
+        fullyReadEventId: r'$message',
+        fullyReadTimestamp: messageTime,
+      ),
+      isTrue,
+    );
+    expect(
+      shouldSuppressNotificationForReadMarker(
+        notifyIfReadElsewhere: false,
+        eventId: r'$message',
+        eventTimestamp: messageTime,
+        fullyReadEventId: r'$newer',
+        fullyReadTimestamp: messageTime.add(const Duration(seconds: 1)),
+      ),
+      isTrue,
+    );
+    expect(
+      shouldSuppressNotificationForReadMarker(
+        notifyIfReadElsewhere: false,
+        eventId: r'$message',
+        eventTimestamp: messageTime,
+        fullyReadEventId: r'$older',
+        fullyReadTimestamp: messageTime.subtract(const Duration(seconds: 1)),
+      ),
+      isFalse,
+    );
+  });
 }

@@ -80,8 +80,8 @@ The client currently:
 - turns new decrypted Matrix timeline events into local Android, Apple, and
   Linux notifications while the client is alive, including messages sent by
   another device logged into the same account;
-- stores notification enablement, default-sound, and preview settings locally
-  per device, with plaintext previews disabled by default;
+- stores notification enablement, default-sound, preview, and cross-device-read
+  behavior locally per device, with plaintext previews disabled by default;
 - keeps downloaded media in a seven-day application cache;
 - uses a private on-device search index unless a room explicitly adds the
   shared Search participant;

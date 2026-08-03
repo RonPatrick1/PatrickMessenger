@@ -7,6 +7,8 @@ class AppConfig {
   static const _productionPushGateway =
       'https://patrick-lamphier.com/_matrix/push/v1/notify';
   static const _iosPushAppId = 'com.patricklamphier.patrickMessenger';
+  static const _androidPushAppId =
+      'com.patricklamphier.patrickMessenger.android';
 
   final Uri homeserver;
   final String serverName;
@@ -16,6 +18,11 @@ class AppConfig {
   final String searchUserId;
   final String pushGatewayUrl;
   final String iosPushAppId;
+  final String androidPushAppId;
+  final String androidFirebaseApiKey;
+  final String androidFirebaseAppId;
+  final String androidFirebaseMessagingSenderId;
+  final String androidFirebaseProjectId;
 
   const AppConfig({
     required this.homeserver,
@@ -26,6 +33,11 @@ class AppConfig {
     this.searchUserId = _productionSearchUserId,
     this.pushGatewayUrl = _productionPushGateway,
     this.iosPushAppId = _iosPushAppId,
+    this.androidPushAppId = _androidPushAppId,
+    this.androidFirebaseApiKey = '',
+    this.androidFirebaseAppId = '',
+    this.androidFirebaseMessagingSenderId = '',
+    this.androidFirebaseProjectId = '',
   });
 
   factory AppConfig.fromEnvironment() => AppConfig(
@@ -51,6 +63,22 @@ class AppConfig {
     iosPushAppId: const String.fromEnvironment(
       'IOS_PUSH_APP_ID',
       defaultValue: _iosPushAppId,
+    ),
+    androidPushAppId: const String.fromEnvironment(
+      'ANDROID_PUSH_APP_ID',
+      defaultValue: _androidPushAppId,
+    ),
+    androidFirebaseApiKey: const String.fromEnvironment(
+      'ANDROID_FIREBASE_API_KEY',
+    ),
+    androidFirebaseAppId: const String.fromEnvironment(
+      'ANDROID_FIREBASE_APP_ID',
+    ),
+    androidFirebaseMessagingSenderId: const String.fromEnvironment(
+      'ANDROID_FIREBASE_MESSAGING_SENDER_ID',
+    ),
+    androidFirebaseProjectId: const String.fromEnvironment(
+      'ANDROID_FIREBASE_PROJECT_ID',
     ),
   );
 
@@ -94,7 +122,28 @@ class AppConfig {
         'MATRIX_PUSH_GATEWAY_URL must be an HTTPS URL.',
       );
     }
+    final androidFirebaseValues = <String>[
+      androidFirebaseApiKey,
+      androidFirebaseAppId,
+      androidFirebaseMessagingSenderId,
+      androidFirebaseProjectId,
+    ];
+    final configuredAndroidFirebaseValues = androidFirebaseValues
+        .where((value) => value.trim().isNotEmpty)
+        .length;
+    if (configuredAndroidFirebaseValues != 0 &&
+        configuredAndroidFirebaseValues != androidFirebaseValues.length) {
+      throw const FormatException(
+        'All ANDROID_FIREBASE_* values must be supplied together.',
+      );
+    }
   }
+
+  bool get hasAndroidFirebaseConfig =>
+      androidFirebaseApiKey.trim().isNotEmpty &&
+      androidFirebaseAppId.trim().isNotEmpty &&
+      androidFirebaseMessagingSenderId.trim().isNotEmpty &&
+      androidFirebaseProjectId.trim().isNotEmpty;
 
   String matrixIdFor(String username) {
     final trimmed = username.trim();

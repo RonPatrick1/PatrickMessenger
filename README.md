@@ -26,7 +26,8 @@ The first milestone currently provides:
 - per-conversation decrypted ZIP exports with readable history and media;
 - sent, delivered, and read indicators with per-member group counts;
 - persistent System, Light, and Dark appearance choices;
-- per-device message notification, sound, and lock-screen-preview choices;
+- per-device message notification, sound, lock-screen-preview, and
+  cross-device-read choices;
 - a local, privacy-hardened Synapse development server;
 - an enforced privacy policy for future Apple Watch and Wear OS previews.
 
@@ -134,7 +135,9 @@ Use **Account settings** in the account menu on the Messages screen to set the
 display name and this device's notification choices. Notifications and the
 system default sound can each be enabled or disabled. Message previews default
 to off, so a lock screen says only that a new encrypted message arrived; turn
-previews on to include the readable sender and message text. **Send test
+previews on to include the readable sender and message text. **Notify after
+reading elsewhere** controls whether this device still alerts after another
+client has advanced the account's read marker. **Send test
 notification** requests the phone's OS permission when needed and verifies the
 current sound choice.
 
@@ -232,7 +235,9 @@ conversation header to rename that conversation.
 The current local notification path works whenever the client is alive and its
 Matrix synchronization receives the event. A message sent from another device
 logged into the same Matrix account is included; only the exact device that
-sent the message suppresses its own notification. Reliable delivery after iOS
+sent the message suppresses its own notification. Each installation can also
+choose whether a read marker from another device suppresses its alert. Reliable
+delivery after iOS
 or Android suspends or terminates the app still requires the production
 APNs/FCM push gateway described in the architecture; local notifications alone
 cannot wake a stopped phone app. The direct-from-Xcode APNs sandbox deployment
@@ -372,3 +377,17 @@ Read [architecture](docs/ARCHITECTURE.md) and the
 The Matrix Dart SDK and Synapse are AGPL-licensed. Distributing an application
 based on this implementation requires satisfying their license terms. The
 licensing decision must be settled before any public or proprietary release.
+
+## Android push notifications
+
+Android uses Firebase Cloud Messaging through the existing Matrix/Sygnal push
+gateway. It does not keep a permanent foreground service or show a permanent
+connected notification.
+
+Copy the Android Firebase values into the gitignored `dart_define.env` file
+using the names in `dart_define.env.example`. Put the Firebase service-account
+JSON at `server/push-secrets/firebase-service-account.json`, copy the Android
+application block from `server/sygnal.yaml.example` into the active
+`server/sygnal.yaml`, replace its Firebase project ID, and restart the Sygnal
+container. When the Firebase client values are absent, the app continues to
+start normally but logs that Android push is disabled.

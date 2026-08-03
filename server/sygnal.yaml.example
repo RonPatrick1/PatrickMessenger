@@ -29,3 +29,8 @@ apps:
     push_type: alert
     convert_device_token_to_hex: false
     send_badge_counts: false
+  com.patricklamphier.patrickMessenger.android:
+    type: gcm
+    api_version: v1
+    project_id: REPLACE_WITH_FIREBASE_PROJECT_ID
+    service_account_file: /sygnal/secrets/firebase-service-account.json

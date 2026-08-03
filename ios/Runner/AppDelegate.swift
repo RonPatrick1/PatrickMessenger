@@ -57,6 +57,10 @@ import Vision
         defaults.set(values["accessToken"], forKey: "accessToken")
         defaults.set(values["userId"], forKey: "userId")
         defaults.set(values["showPreviews"], forKey: "showPreviews")
+        defaults.set(
+          values["notifyIfReadElsewhere"],
+          forKey: "notifyIfReadElsewhere"
+        )
         result(nil)
       default:
         result(FlutterMethodNotImplemented)

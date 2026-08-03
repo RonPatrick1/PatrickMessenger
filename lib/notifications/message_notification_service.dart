@@ -85,6 +85,7 @@ class MessageNotificationService {
           ) ??
           false;
       if (_initialized && defaultTargetPlatform == TargetPlatform.android) {
+        await _ensureAndroidChannels();
         // Opening the app acknowledges previous message alerts. This also
         // clears notifications left by an older build.
         await _plugin.cancelAll();
@@ -207,6 +208,33 @@ class MessageNotificationService {
     }
   }
 
+  Future<void> _ensureAndroidChannels() async {
+    final android = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    await android?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        _soundChannelId,
+        'Messages with sound',
+        description: 'New encrypted messages with the default sound',
+        importance: Importance.high,
+        playSound: true,
+        enableVibration: true,
+      ),
+    );
+    await android?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        _silentChannelId,
+        'Silent messages',
+        description: 'New encrypted messages without sound',
+        importance: Importance.high,
+        playSound: false,
+        enableVibration: true,
+      ),
+    );
+  }
+
   Future<bool> requestPermission({required bool sound}) async {
     if (!_initialized) return false;
     try {
@@ -278,6 +306,7 @@ class MessageNotificationService {
     if (!_remember(event.eventId)) return;
 
     try {
+      if (await _wasReadElsewhere(event)) return;
       final sender = readableMatrixUserName(event.senderFromMemoryOrFallback);
       final roomName = readableMatrixRoomName(event.room);
       final invited =
@@ -313,6 +342,29 @@ class MessageNotificationService {
     } catch (error, stackTrace) {
       debugPrint('Could not show message notification: $error');
       debugPrintStack(stackTrace: stackTrace);
+    }
+  }
+
+  Future<bool> _wasReadElsewhere(Event event) async {
+    if (_preferences.notifyIfReadElsewhere) return false;
+    final markerId = event.room.fullyRead;
+    if (markerId.isEmpty) return false;
+    if (markerId == event.eventId) return true;
+
+    try {
+      final marker = await event.room.getEventById(markerId);
+      return shouldSuppressNotificationForReadMarker(
+        notifyIfReadElsewhere: false,
+        eventId: event.eventId,
+        eventTimestamp: event.originServerTs,
+        fullyReadEventId: markerId,
+        fullyReadTimestamp: marker?.originServerTs,
+      );
+    } catch (error) {
+      // A stale or temporarily unavailable marker must not make a new message
+      // disappear. The exact-ID case above remains safe without a lookup.
+      debugPrint('Could not inspect the cross-device read marker: $error');
+      return false;
     }
   }
 
@@ -457,6 +509,21 @@ bool shouldNotifyForTimelineEvent({
   if (relationshipType == RelationshipTypes.edit) return false;
   if (senderId == ownUserId && transactionId != null) return false;
   return eventType == EventTypes.Message || eventType == EventTypes.Sticker;
+}
+
+/// Whether a local alert should be discarded because another client advanced
+/// the account's fully-read marker to this event or a newer one.
+bool shouldSuppressNotificationForReadMarker({
+  required bool notifyIfReadElsewhere,
+  required String eventId,
+  required DateTime eventTimestamp,
+  required String fullyReadEventId,
+  required DateTime? fullyReadTimestamp,
+}) {
+  if (notifyIfReadElsewhere || fullyReadEventId.isEmpty) return false;
+  if (fullyReadEventId == eventId) return true;
+  return fullyReadTimestamp != null &&
+      !fullyReadTimestamp.isBefore(eventTimestamp);
 }
 
 String notificationPreview(Event event) {
