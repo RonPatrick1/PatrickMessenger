@@ -135,6 +135,12 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     debugPrint('Android background push handling failed: $error');
     debugPrintStack(stackTrace: stackTrace);
   } finally {
-    await client?.dispose(closeDatabase: true);
+    // Sqflite returns one process-wide connection for this database path. A
+    // background Firebase engine can therefore share the native connection
+    // with the foreground Matrix client even though each uses a separate Dart
+    // isolate. Closing it here leaves the foreground sync loop permanently
+    // failing with DatabaseException(database_closed 7). The operating system
+    // will release the connection when the app process exits.
+    await client?.dispose(closeDatabase: false);
   }
 }
