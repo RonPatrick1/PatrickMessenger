@@ -19,6 +19,7 @@ import 'package:window_manager/window_manager.dart';
 import '../archive/archive_contract.dart';
 import '../archive/archive_models.dart';
 import '../archive/archive_repository.dart';
+import '../config/app_config.dart';
 import '../export/conversation_export_service.dart';
 import '../history/timeline_key_recovery.dart';
 import '../matrix/display_names.dart';
@@ -43,10 +44,12 @@ import 'chat/message_bubble.dart';
 import 'chat/message_interactions.dart';
 import 'chat/rename_conversation_dialog.dart';
 import 'chat/typing_indicator.dart';
+import 'new_conversation_dialog.dart';
 import 'search_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final Room room;
+  final AppConfig config;
   final String giphyApiKey;
   final String liamUserId;
   final TextScalePreferenceController textScaleController;
@@ -59,6 +62,7 @@ class ChatScreen extends StatefulWidget {
 
   const ChatScreen({
     required this.room,
+    required this.config,
     required this.giphyApiKey,
     required this.liamUserId,
     required this.textScaleController,
@@ -2163,6 +2167,44 @@ class _ChatScreenState extends State<ChatScreen>
     }
   }
 
+  Future<void> _addPersonToConversation() async {
+    final room = widget.room;
+    final result = await showDialog<NewConversationResult>(
+      context: context,
+      builder: (_) => NewConversationDialog(
+        client: room.client,
+        config: widget.config,
+        title: 'Add people',
+        groupTitle: null,
+        allowGroupName: false,
+        confirmLabel: 'Add',
+      ),
+    );
+    if (result == null || result.recipients.isEmpty || !mounted) return;
+
+    try {
+      for (final profile in result.recipients) {
+        await room.invite(profile.userId);
+      }
+      // A room previously marked as a 1-on-1 direct chat no longer fits that
+      // once someone else joins it.
+      if (room.directChatMatrixID != null) {
+        await room.removeFromDirectChat();
+      }
+      if (mounted) {
+        _showStatus(
+          result.recipients.length == 1
+              ? 'Invited ${result.recipients.single.displayName ?? result.recipients.single.userId}.'
+              : 'Invited ${result.recipients.length} people.',
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        _showError('Some people could not be invited to this conversation.');
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final timeline = _timeline;
@@ -2267,6 +2309,11 @@ class _ChatScreenState extends State<ChatScreen>
                         ? Icons.smart_toy
                         : Icons.smart_toy_outlined,
                   ),
+                ),
+                IconButton(
+                  onPressed: _addPersonToConversation,
+                  tooltip: 'Add person',
+                  icon: const Icon(Icons.person_add_outlined),
                 ),
                 IconButton(
                   onPressed: _renameConversation,

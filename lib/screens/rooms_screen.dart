@@ -7,7 +7,6 @@ import '../config/app_config.dart';
 import '../archive/archive_repository.dart';
 import '../matrix/display_names.dart';
 import '../matrix/room_rename_permissions.dart';
-import '../matrix/user_directory_resolver.dart';
 import '../notifications/conversation_mute_controller.dart';
 import '../notifications/liam_chatter_visibility.dart';
 import '../notifications/message_notification_service.dart';
@@ -21,6 +20,7 @@ import '../settings/theme_preference.dart';
 import 'chat_screen.dart';
 import 'chat/emoji_style.dart';
 import 'history_recovery_dialog.dart';
+import 'new_conversation_dialog.dart';
 import 'profile_dialog.dart';
 import 'search_screen.dart';
 
@@ -168,6 +168,8 @@ class RoomsScreen extends StatelessWidget {
                             onTap: () => _openRoom(context, room),
                             onToggleMute: () =>
                                 _toggleConversationMute(context, room),
+                            onAddPerson: () =>
+                                _addPersonToConversation(context, room),
                             onDelete: () => _deleteConversation(context, room),
                           );
                         },
@@ -243,6 +245,7 @@ class RoomsScreen extends StatelessWidget {
       MaterialPageRoute<void>(
         builder: (_) => ChatScreen(
           room: room,
+          config: config,
           giphyApiKey: config.giphyApiKey,
           liamUserId: config.liamUserId,
           textScaleController: textScaleController,
@@ -268,37 +271,41 @@ class RoomsScreen extends StatelessWidget {
   }
 
   Future<void> _startConversation(BuildContext context) async {
-    final accountName = await showDialog<String>(
+    final result = await showDialog<NewConversationResult>(
       context: context,
-      builder: (_) => const _NewConversationDialog(),
+      builder: (_) => NewConversationDialog(client: client, config: config),
     );
-    if (accountName == null || accountName.isEmpty || !context.mounted) return;
+    if (result == null || result.recipients.isEmpty || !context.mounted) {
+      return;
+    }
 
+    if (result.recipients.length == 1) {
+      await _startDirectConversation(context, result.recipients.single);
+      return;
+    }
+    await _startGroupConversation(context, result);
+  }
+
+  Future<void> _startDirectConversation(
+    BuildContext context,
+    Profile profile,
+  ) async {
+    final matrixId = profile.userId;
     final messenger = ScaffoldMessenger.of(context);
+
+    for (final room in client.rooms) {
+      if ((room.membership == Membership.join ||
+              room.membership == Membership.invite) &&
+          room.directChatMatrixID == matrixId) {
+        await _openRoom(context, room);
+        return;
+      }
+    }
+
     messenger.showSnackBar(
-      const SnackBar(content: Text('Finding that account…')),
+      const SnackBar(content: Text('Creating an encrypted conversation…')),
     );
     try {
-      final profile = await UserDirectoryResolver(
-        client: client,
-        config: config,
-      ).resolve(accountName);
-      final matrixId = profile.userId;
-      if (!context.mounted) return;
-
-      for (final room in client.rooms) {
-        if ((room.membership == Membership.join ||
-                room.membership == Membership.invite) &&
-            room.directChatMatrixID == matrixId) {
-          messenger.hideCurrentSnackBar();
-          await _openRoom(context, room);
-          return;
-        }
-      }
-
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Creating an encrypted conversation…')),
-      );
       final roomId = await client.createGroupChat(
         invite: [matrixId],
         enableEncryption: true,
@@ -312,11 +319,83 @@ class RoomsScreen extends StatelessWidget {
       if (room == null) throw StateError('Room was not returned by sync.');
       await room.addToDirectChat(matrixId);
       if (context.mounted) await _openRoom(context, room);
-    } on UserDirectoryResolutionException catch (error) {
-      if (context.mounted) _showError(context, error.message);
     } catch (_) {
       if (context.mounted) {
         _showError(context, 'The encrypted conversation could not be created.');
+      }
+    }
+  }
+
+  Future<void> _startGroupConversation(
+    BuildContext context,
+    NewConversationResult result,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Creating an encrypted group…')),
+    );
+    try {
+      final roomId = await client.createGroupChat(
+        invite: [for (final profile in result.recipients) profile.userId],
+        groupName: result.groupName,
+        enableEncryption: true,
+        federated: false,
+        historyVisibility: HistoryVisibility.invited,
+        powerLevelContentOverride: {
+          'events': {EventTypes.RoomName: 0},
+        },
+      );
+      final room = client.getRoomById(roomId);
+      if (room == null) throw StateError('Room was not returned by sync.');
+      if (context.mounted) await _openRoom(context, room);
+    } catch (_) {
+      if (context.mounted) {
+        _showError(context, 'The encrypted group could not be created.');
+      }
+    }
+  }
+
+  Future<void> _addPersonToConversation(BuildContext context, Room room) async {
+    final result = await showDialog<NewConversationResult>(
+      context: context,
+      builder: (_) => NewConversationDialog(
+        client: client,
+        config: config,
+        title: 'Add people',
+        groupTitle: null,
+        allowGroupName: false,
+        confirmLabel: 'Add',
+      ),
+    );
+    if (result == null || result.recipients.isEmpty || !context.mounted) {
+      return;
+    }
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          result.recipients.length == 1
+              ? 'Inviting ${result.recipients.single.displayName ?? result.recipients.single.userId}…'
+              : 'Inviting ${result.recipients.length} people…',
+        ),
+      ),
+    );
+    try {
+      for (final profile in result.recipients) {
+        await room.invite(profile.userId);
+      }
+      // A room previously marked as a 1-on-1 direct chat no longer fits that
+      // once someone else joins it.
+      if (room.directChatMatrixID != null) {
+        await room.removeFromDirectChat();
+      }
+    } catch (_) {
+      if (context.mounted) {
+        _showError(
+          context,
+          'Some people could not be invited to this conversation.',
+        );
       }
     }
   }
@@ -560,6 +639,7 @@ class _RoomTile extends StatelessWidget {
   final bool muted;
   final VoidCallback onTap;
   final VoidCallback onToggleMute;
+  final VoidCallback onAddPerson;
   final VoidCallback onDelete;
 
   const _RoomTile({
@@ -567,6 +647,7 @@ class _RoomTile extends StatelessWidget {
     required this.muted,
     required this.onTap,
     required this.onToggleMute,
+    required this.onAddPerson,
     required this.onDelete,
   });
 
@@ -626,6 +707,8 @@ class _RoomTile extends StatelessWidget {
                 switch (action) {
                   case _ConversationAction.toggleMute:
                     onToggleMute();
+                  case _ConversationAction.addPerson:
+                    onAddPerson();
                   case _ConversationAction.delete:
                     onDelete();
                 }
@@ -642,6 +725,14 @@ class _RoomTile extends StatelessWidget {
                     title: Text(
                       muted ? 'Unmute conversation' : 'Mute conversation',
                     ),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: _ConversationAction.addPerson,
+                  child: ListTile(
+                    leading: Icon(Icons.person_add_outlined),
+                    title: Text('Add person'),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
@@ -704,58 +795,9 @@ class _EmptyRooms extends StatelessWidget {
   }
 }
 
-class _NewConversationDialog extends StatefulWidget {
-  const _NewConversationDialog();
-
-  @override
-  State<_NewConversationDialog> createState() => _NewConversationDialogState();
-}
-
-class _NewConversationDialogState extends State<_NewConversationDialog> {
-  final _controller = TextEditingController();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('New encrypted conversation'),
-      content: TextField(
-        controller: _controller,
-        autofocus: true,
-        autocorrect: false,
-        onSubmitted: (value) => _finish(value),
-        decoration: InputDecoration(
-          labelText: 'Name or username',
-          helperText: 'For example: Ron Patrick or ron_patrick',
-          helperMaxLines: 2,
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () => _finish(_controller.text),
-          child: const Text('Create'),
-        ),
-      ],
-    );
-  }
-
-  void _finish(String value) {
-    Navigator.pop(context, value.trim());
-  }
-}
-
 enum _AccountAction { settings, signOut }
 
-enum _ConversationAction { toggleMute, delete }
+enum _ConversationAction { toggleMute, addPerson, delete }
 
 String _initial(String name) {
   final trimmed = name.trim();
