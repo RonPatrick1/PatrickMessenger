@@ -8,5 +8,14 @@
 	<array>
 		<string>group.com.patricklamphier.patrickMessenger</string>
 	</array>
+	<key>com.apple.developer.siri</key>
+	<true/>
+	<!--
+	  Once Apple approves the CarPlay entitlement request, add:
+	    <key>com.apple.developer.carplay-communication</key>
+	    <true/>
+	  Adding it before approval will fail code signing (Xcode validates
+	  entitlements against the provisioning profile's approved capabilities).
+	-->
 </dict>
 </plist>

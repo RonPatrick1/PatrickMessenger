@@ -438,10 +438,9 @@ packages:
   flutter_vodozemac:
     dependency: "direct main"
     description:
-      name: flutter_vodozemac
-      sha256: "4503bc4a33a5126539fe68eecbf736eafe412474874a2ebbfc94aef0b0d2e304"
-      url: "https://pub.dev"
-    source: hosted
+      path: "native/flutter_vodozemac"
+      relative: true
+    source: path
     version: "0.6.0"
   flutter_web_plugins:
     dependency: transitive

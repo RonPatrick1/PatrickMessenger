@@ -1,4 +1,5 @@
 import Flutter
+import Intents
 import Photos
 import UIKit
 import UserNotifications
@@ -75,6 +76,8 @@ import Vision
           values["notifyIfReadElsewhere"],
           forKey: "notifyIfReadElsewhere"
         )
+        defaults.set(values["deviceId"], forKey: "deviceId")
+        defaults.set(values["senderKey"], forKey: "senderKey")
         result(nil)
       default:
         result(FlutterMethodNotImplemented)
@@ -158,6 +161,73 @@ import Vision
           resourceType: .photo,
           result: result
         )
+      }
+    }
+
+    registerCarDonationChannel(engineBridge)
+  }
+
+  private func registerCarDonationChannel(_ engineBridge: FlutterImplicitEngineBridge) {
+    let channel = FlutterMethodChannel(
+      name: "com.patricklamphier.patrickMessenger/car_donation",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    channel.setMethodCallHandler { call, result in
+      guard
+        call.method == "donate",
+        let arguments = call.arguments as? [String: Any],
+        let roomId = arguments["roomId"] as? String,
+        let recipientName = arguments["recipientName"] as? String
+      else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let isGroupConversation = arguments["isGroupConversation"] as? Bool ?? false
+      Self.donateSendMessageIntent(
+        roomId: roomId,
+        recipientName: recipientName,
+        isGroupConversation: isGroupConversation
+      )
+      result(nil)
+    }
+  }
+
+  /// Tells Siri about this room so it can resolve "send a message to
+  /// <name>" (including via CarPlay) to the right `conversationIdentifier`
+  /// for `IntentHandler` (the CarPlay Intents Extension) to pick up. Matrix
+  /// has no phone/email-based address book, so recipients are identified by
+  /// an app-scoped `INPersonHandle` keyed on the room ID rather than a
+  /// real contact.
+  private static func donateSendMessageIntent(
+    roomId: String,
+    recipientName: String,
+    isGroupConversation: Bool
+  ) {
+    let handle = INPersonHandle(value: roomId, type: .unknown)
+    let person = INPerson(
+      personHandle: handle,
+      nameComponents: nil,
+      displayName: recipientName,
+      image: nil,
+      contactIdentifier: nil,
+      customIdentifier: roomId
+    )
+    let intent = INSendMessageIntent(
+      recipients: [person],
+      outgoingMessageType: .outgoingMessageText,
+      content: nil,
+      speakableGroupName: isGroupConversation
+        ? INSpeakableString(spokenPhrase: recipientName)
+        : nil,
+      conversationIdentifier: roomId,
+      serviceName: "Patrick Messenger",
+      sender: nil,
+      attachments: nil
+    )
+    let interaction = INInteraction(intent: intent, response: nil)
+    interaction.donate { error in
+      if let error {
+        NSLog("CarPlay donation failed: \(error.localizedDescription)")
       }
     }
   }

@@ -23,7 +23,9 @@ import '../config/app_config.dart';
 import '../export/conversation_export_service.dart';
 import '../history/timeline_key_recovery.dart';
 import '../matrix/display_names.dart';
+import '../matrix/matrix_message_sender.dart';
 import '../matrix/timeline_event_merge.dart';
+import '../notifications/car_donation_service.dart';
 import '../notifications/liam_chatter_visibility.dart';
 import '../receipts/message_receipt_service.dart';
 import '../receipts/read_visibility.dart';
@@ -160,6 +162,7 @@ class _ChatScreenState extends State<ChatScreen>
     );
     widget.liamChatterVisibility.addListener(_handlePreferencesChanged);
     widget.archive.addListener(_handleArchiveChanged);
+    unawaited(CarDonationService.donate(widget.room));
     _archiveMessages = widget.archive.messages;
     if (widget.initialShare != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -768,9 +771,11 @@ class _ChatScreenState extends State<ChatScreen>
       if (editingArchiveMessage != null) {
         await widget.archive.edit(editingArchiveMessage.id, message);
       } else if (editingEvent != null) {
-        await widget.room.sendTextEvent(
-          message,
-          editEventId: editingEvent.eventId,
+        await MatrixMessageSender.guarded(
+          () => widget.room.sendTextEvent(
+            message,
+            editEventId: editingEvent.eventId,
+          ),
         );
       } else {
         final content = <String, dynamic>{
@@ -784,10 +789,13 @@ class _ChatScreenState extends State<ChatScreen>
               'event_id': _relationRootEventId(),
             },
         };
-        await widget.room.sendEvent(
-          content,
-          inReplyTo: liamQuestion == null ? replyTo : null,
+        await MatrixMessageSender.guarded(
+          () => widget.room.sendEvent(
+            content,
+            inReplyTo: liamQuestion == null ? replyTo : null,
+          ),
         );
+        unawaited(CarDonationService.donate(widget.room));
       }
     } catch (_) {
       if (!mounted) return;

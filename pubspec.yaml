@@ -35,7 +35,11 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   matrix: ^8.1.0
-  flutter_vodozemac: ^0.6.0
+  # Vendored fork (native/flutter_vodozemac) adding ios_encrypt_event, the
+  # C FFI entry point the CarPlay Intents Extension uses to send messages.
+  # Upstream (famedly/dart-vodozemac) only exposes decrypt for iOS extensions.
+  flutter_vodozemac:
+    path: native/flutter_vodozemac
   flutter_local_notifications: ^22.1.0
   path: ^1.9.1
   path_provider: ^2.1.6

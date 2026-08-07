@@ -11,6 +11,7 @@ import 'config/app_config.dart';
 import 'matrix/matrix_client_factory.dart';
 import 'notifications/android_background_message_handler.dart';
 import 'notifications/android_push_service.dart';
+import 'notifications/car_reply_registration.dart';
 import 'notifications/conversation_mute_controller.dart';
 import 'notifications/ios_push_service.dart';
 import 'notifications/liam_chatter_visibility.dart';
@@ -99,6 +100,7 @@ Future<void> _startup() async {
     config.liamUserId,
   );
   await notificationService.initialize();
+  await CarReplyRegistration.register();
   final iosPushService = IosPushService(
     client: client,
     preferences: notificationController,

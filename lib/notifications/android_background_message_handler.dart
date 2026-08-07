@@ -11,6 +11,7 @@ import '../matrix/display_names.dart';
 import '../matrix/matrix_client_factory.dart';
 import '../screens/chat/message_interactions.dart';
 import 'android_push_service.dart';
+import 'car_notification_bridge.dart';
 import 'conversation_mute_controller.dart';
 import 'liam_chatter_visibility.dart';
 import 'message_notification_service.dart' show notificationPreview;
@@ -111,8 +112,9 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       ),
     );
 
+    final notificationId = event.eventId.hashCode & 0x7fffffff;
     await plugin.show(
-      id: event.eventId.hashCode & 0x7fffffff,
+      id: notificationId,
       title: title,
       body: body,
       payload: roomId,
@@ -131,6 +133,18 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         ),
       ),
     );
+
+    if (preferences.showPreviews) {
+      await CarNotificationBridge.show(
+        roomId: roomId,
+        notificationId: notificationId,
+        senderId: event.senderFromMemoryOrFallback.id,
+        senderName: sender,
+        conversationTitle: roomName,
+        isGroupConversation: !room.isDirectChat,
+        body: body,
+      );
+    }
   } catch (error, stackTrace) {
     debugPrint('Android background push handling failed: $error');
     debugPrintStack(stackTrace: stackTrace);

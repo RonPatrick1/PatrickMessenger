@@ -16,7 +16,7 @@ import 'screens/rooms_screen.dart';
 import 'settings/text_scale_preference.dart';
 import 'settings/theme_preference.dart';
 
-class PatrickMessengerApp extends StatelessWidget {
+class PatrickMessengerApp extends StatefulWidget {
   final Client client;
   final AppConfig config;
   final ThemePreferenceController themeController;
@@ -49,7 +49,51 @@ class PatrickMessengerApp extends StatelessWidget {
   });
 
   @override
+  State<PatrickMessengerApp> createState() => _PatrickMessengerAppState();
+}
+
+class _PatrickMessengerAppState extends State<PatrickMessengerApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // A car-reply path (Android Auto's headless isolate, or on iOS the
+    // CarPlay Intents Extension process) can advance a room's outbound
+    // Megolm session on disk while this app is backgrounded. The main
+    // Client's KeyManager caches that session in memory and won't know it
+    // was superseded, so drop the cache on resume to force a fresh load
+    // from the database before this app sends anything else.
+    if (state == AppLifecycleState.resumed) {
+      widget.client.encryption?.keyManager.clearOutboundGroupSessions();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final client = widget.client;
+    final config = widget.config;
+    final themeController = widget.themeController;
+    final textScaleController = widget.textScaleController;
+    final notificationController = widget.notificationController;
+    final notificationService = widget.notificationService;
+    final conversationMuteController = widget.conversationMuteController;
+    final liamChatterVisibility = widget.liamChatterVisibility;
+    final archives = widget.archives;
+    final searchIndex = widget.searchIndex;
+    final readReceiptController = widget.readReceiptController;
+    final receiptService = widget.receiptService;
+    final incomingShares = widget.incomingShares;
     return ListenableBuilder(
       listenable: themeController,
       builder: (context, _) => ListenableBuilder(

@@ -71,6 +71,7 @@ app.*.map.json
 /server/push-secrets/
 /liam_bot/target/
 /search_bot/target/
+/native/flutter_vodozemac/rust/target/
 *.jks
 *.keystore
 *.p8

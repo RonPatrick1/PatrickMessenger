@@ -91,6 +91,10 @@ class IosPushService {
         'userId': _client.userID,
         'showPreviews': _preferences.showPreviews,
         'notifyIfReadElsewhere': _preferences.notifyIfReadElsewhere,
+        // Needed by the CarPlay Intents Extension to build a correct
+        // m.room.encrypted event content when sending from the car.
+        'deviceId': _client.deviceID,
+        'senderKey': _client.identityKey,
       });
       if (!_preferences.enabled) {
         await _client.deletePusher(PusherId(appId: _appId, pushkey: token));

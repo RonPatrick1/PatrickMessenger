@@ -40,7 +40,7 @@ class MatrixClientFactory {
       supportDirectory.path,
       'patrick_messenger.sqlite',
     );
-    final sharedContainerPath = await _iosSharedContainerPath();
+    final sharedContainerPath = await iosSharedContainerPath();
     final databasePath = sharedContainerPath == null
         ? oldDatabasePath
         : path.join(sharedContainerPath, 'patrick_messenger.sqlite');
@@ -74,7 +74,7 @@ class MatrixClientFactory {
     return client;
   }
 
-  static Future<String?> _iosSharedContainerPath() async {
+  static Future<String?> iosSharedContainerPath() async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return null;
     try {
       return await _iosChannel.invokeMethod<String>('getSharedContainerPath');

@@ -52,6 +52,8 @@
 	<string>Save pictures from encrypted conversations to your photo library.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Take pictures to send in encrypted conversations.</string>
+	<key>NSSiriUsageDescription</key>
+	<string>Send messages in encrypted conversations hands-free with Siri and CarPlay.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

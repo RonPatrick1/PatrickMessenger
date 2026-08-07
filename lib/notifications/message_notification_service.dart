@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import '../archive/archive_contract.dart';
 import '../matrix/display_names.dart';
 import '../screens/chat/message_interactions.dart';
+import 'car_notification_bridge.dart';
 import 'conversation_mute_controller.dart';
 import 'liam_chatter_visibility.dart';
 import 'notification_preferences.dart';
@@ -331,14 +332,29 @@ class MessageNotificationService {
           ? await _prepareImagePreview(event)
           : null;
 
+      final notificationId = event.eventId.hashCode & 0x7fffffff;
       await _show(
-        id: event.eventId.hashCode & 0x7fffffff,
+        id: notificationId,
         title: title,
         body: body,
         payload: event.room.id,
         sound: _preferences.soundEnabled,
         attachmentPath: attachmentPath,
       );
+
+      if (!invited && _preferences.showPreviews) {
+        unawaited(
+          CarNotificationBridge.show(
+            roomId: event.room.id,
+            notificationId: notificationId,
+            senderId: event.senderFromMemoryOrFallback.id,
+            senderName: sender,
+            conversationTitle: roomName,
+            isGroupConversation: !event.room.isDirectChat,
+            body: body,
+          ),
+        );
+      }
     } catch (error, stackTrace) {
       debugPrint('Could not show message notification: $error');
       debugPrintStack(stackTrace: stackTrace);

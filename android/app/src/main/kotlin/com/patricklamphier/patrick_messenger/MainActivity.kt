@@ -109,6 +109,61 @@ class MainActivity : FlutterActivity() {
                 saveMedia(pending)
             }
         }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.patricklamphier.patrickMessenger/car_reply",
+        ).setMethodCallHandler { call, result ->
+            if (call.method != "registerCallback") {
+                result.notImplemented()
+                return@setMethodCallHandler
+            }
+            val handle = call.argument<Number>("handle")?.toLong()
+            if (handle == null) {
+                result.error("invalid_handle", "No callback handle was provided.", null)
+                return@setMethodCallHandler
+            }
+            getSharedPreferences(CarReplyService.CAR_REPLY_PREFS, MODE_PRIVATE)
+                .edit()
+                .putLong(CarReplyService.CALLBACK_HANDLE_KEY, handle)
+                .apply()
+            result.success(null)
+        }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.patricklamphier.patrickMessenger/car_notification",
+        ).setMethodCallHandler { call, result ->
+            if (call.method != "show") {
+                result.notImplemented()
+                return@setMethodCallHandler
+            }
+            val roomId = call.argument<String>("roomId")
+            val senderId = call.argument<String>("senderId")
+            val senderName = call.argument<String>("senderName")
+            val conversationTitle = call.argument<String>("conversationTitle")
+            val body = call.argument<String>("body")
+            val isGroupConversation = call.argument<Boolean>("isGroupConversation") ?: false
+            val phoneNotificationId = call.argument<Number>("notificationId")?.toInt() ?: -1
+            if (
+                roomId == null || senderId == null || senderName == null ||
+                    conversationTitle == null || body == null
+            ) {
+                result.error("invalid_arguments", "Missing car notification fields.", null)
+                return@setMethodCallHandler
+            }
+            CarMessagingNotificationBuilder.show(
+                context = this,
+                roomId = roomId,
+                phoneNotificationId = phoneNotificationId,
+                senderId = senderId,
+                senderName = senderName,
+                conversationTitle = conversationTitle,
+                isGroupConversation = isGroupConversation,
+                body = body,
+            )
+            result.success(null)
+        }
     }
 
     override fun onRequestPermissionsResult(
